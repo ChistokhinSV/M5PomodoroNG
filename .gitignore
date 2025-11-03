@@ -1,0 +1,46 @@
+# PlatformIO
+.pio/
+.vscode/
+.pioenvs
+.piolibdeps
+.clang_complete
+.gcc-flags.json
+
+# Build artifacts
+*.o
+*.a
+*.elf
+*.bin
+*.map
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+*.bak
+
+# Credentials and secrets
+secrets.h
+*.pem
+*.key
+*.crt
+certs/
+
+# Logs
+*.log
+
+# Test coverage
+coverage/
+htmlcov/
+.coverage
+
+# Temporary files
+*.tmp
+temp/
