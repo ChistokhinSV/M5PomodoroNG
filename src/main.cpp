@@ -1,25 +1,23 @@
 /*
- * M5 Pomodoro Timer v2 - Main Screen Test
+ * M5 Pomodoro Timer v2 - Statistics Screen Test
  *
- * Testing MainScreen with TimerStateMachine and PomodoroSequence
+ * Testing StatsScreen with populated Statistics data
  */
 
 #include <M5Unified.h>
 #include "ui/Renderer.h"
-#include "ui/screens/MainScreen.h"
-#include "core/PomodoroSequence.h"
-#include "core/TimerStateMachine.h"
+#include "ui/screens/StatsScreen.h"
+#include "core/Statistics.h"
 
 Renderer renderer;
 uint32_t lastUpdate = 0;
 uint32_t lastSecond = 0;
 
 // Core components
-PomodoroSequence sequence;
-TimerStateMachine stateMachine(sequence);
+Statistics statistics;
 
-// Main screen
-MainScreen mainScreen(stateMachine, sequence);
+// Stats screen
+StatsScreen statsScreen(statistics);
 
 void setup() {
     // Initialize M5
@@ -30,7 +28,7 @@ void setup() {
     delay(100);
 
     Serial.println("\n=================================");
-    Serial.println("M5 Pomodoro v2 - Main Screen Test");
+    Serial.println("M5 Pomodoro v2 - Stats Screen Test");
     Serial.println("=================================");
 
     // Check PSRAM
@@ -50,23 +48,45 @@ void setup() {
     }
     Serial.println("[OK] Renderer initialized");
 
-    // Initialize sequence (Classic mode, 25-5-25-5-25-5-25-15)
-    sequence.setMode(PomodoroSequence::Mode::CLASSIC);
-    sequence.start();
-    Serial.println("[OK] Pomodoro sequence initialized (Classic mode)");
+    // Initialize statistics system
+    if (!statistics.begin()) {
+        Serial.println("[ERROR] Failed to initialize statistics");
+    } else {
+        Serial.println("[OK] Statistics initialized");
+    }
 
-    // Update main screen status
+    // Populate statistics with test data
+    Serial.println("[Test] Populating statistics with test data...");
+
+    // Record several work sessions for today
+    for (uint8_t s = 0; s < 6; s++) {
+        statistics.recordWorkSession(25, true);  // 25 min, completed
+    }
+
+    // Print stats for verification
+    Statistics::DayStats last7[7];
+    statistics.getLast7Days(last7);
+
+    Serial.print("[Test] Last 7 days: [");
+    for (uint8_t i = 0; i < 7; i++) {
+        Serial.print(last7[i].completed_sessions);
+        if (i < 6) Serial.print(", ");
+    }
+    Serial.println("]");
+
+    Statistics::DayStats today = statistics.getToday();
+    Serial.printf("[Test] Today: %d\n", today.completed_sessions);
+    Serial.printf("[Test] Total: %d\n", statistics.getTotalCompleted());
+    Serial.printf("[Test] Last 7 days total: %d\n", statistics.getLast7DaysTotal());
+
+    // Update stats screen status
     uint8_t battery = M5.Power.getBatteryLevel();
     bool charging = M5.Power.isCharging();
-    mainScreen.updateStatus(battery, charging, false, "BAL", 10, 45);
-    mainScreen.setTaskName("Deep Work Session");
+    statsScreen.updateStatus(battery, charging, false, "BAL", 10, 45);
 
     Serial.println("\nControls:");
-    Serial.println("- Touch 'Start' to begin timer");
-    Serial.println("- Touch 'Pause' to pause/resume");
-    Serial.println("- Touch 'Stop' to reset");
-    Serial.println("- Touch 'Stats' (placeholder)");
-    Serial.println("\n[OK] Main screen initialized\n");
+    Serial.println("- Touch '<- Back' button (top-left)");
+    Serial.println("\n[OK] Stats screen initialized\n");
 
     lastUpdate = millis();
     lastSecond = millis();
@@ -79,11 +99,11 @@ void loop() {
     auto touch = M5.Touch.getDetail();
 
     if (touch.wasPressed()) {
-        mainScreen.handleTouch(touch.x, touch.y, true);
+        statsScreen.handleTouch(touch.x, touch.y, true);
     }
 
     if (touch.wasReleased()) {
-        mainScreen.handleTouch(touch.x, touch.y, false);
+        statsScreen.handleTouch(touch.x, touch.y, false);
     }
 
     // Update at 30 FPS (~33ms per frame)
@@ -93,11 +113,11 @@ void loop() {
     if (deltaMs >= 33) {
         lastUpdate = now;
 
-        // Update main screen (includes state machine update)
-        mainScreen.update(deltaMs);
+        // Update stats screen
+        statsScreen.update(deltaMs);
 
         // Draw
-        mainScreen.draw(renderer);
+        statsScreen.draw(renderer);
 
         // Push to display
         renderer.update();
@@ -120,7 +140,7 @@ void loop() {
             hour = (hour + 1) % 24;
         }
 
-        mainScreen.updateStatus(battery, charging, false, "BAL", hour, minute);
+        statsScreen.updateStatus(battery, charging, false, "BAL", hour, minute);
     }
 
     delay(1);  // Prevent watchdog
