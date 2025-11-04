@@ -6,7 +6,9 @@
       "Bash(pio run:*)",
       "Bash(powershell -Command:*)",
       "Bash(pio pkg:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(timeout /t 5 /nobreak)",
+      "Bash(nul)"
     ],
     "deny": [],
     "ask": []

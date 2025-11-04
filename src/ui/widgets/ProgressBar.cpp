@@ -41,10 +41,19 @@ void ProgressBar::update(uint32_t deltaMs) {
             current_progress_ = target_progress_;
             anim_elapsed_ms_ = ANIM_DURATION_MS;
         } else {
-            // Linear interpolation
+            // Linear interpolation with clamping
             int16_t progress_delta = target_progress_ - current_progress_;
-            current_progress_ = current_progress_ +
+            int16_t new_progress = current_progress_ +
                 (progress_delta * anim_elapsed_ms_) / ANIM_DURATION_MS;
+
+            // Clamp to valid range [0, 100]
+            if (new_progress > 100) {
+                current_progress_ = 100;
+            } else if (new_progress < 0) {
+                current_progress_ = 0;
+            } else {
+                current_progress_ = new_progress;
+            }
         }
 
         markDirty();
@@ -65,9 +74,16 @@ void ProgressBar::draw(Renderer& renderer) {
     // Draw filled portion
     if (current_progress_ > 0) {
         int16_t fill_width = (bounds_.w * current_progress_) / 100;
+
+        // Clamp fill width to never overflow bar bounds
+        int16_t max_fill = bounds_.w - 2;
+        if (fill_width > max_fill) {
+            fill_width = max_fill;
+        }
+
         if (fill_width > 0) {
             renderer.drawRect(bounds_.x + 1, bounds_.y + 1,
-                             fill_width - 2, bounds_.h - 2,
+                             fill_width, bounds_.h - 2,
                              color_, true);
         }
     }
