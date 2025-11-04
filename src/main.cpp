@@ -1,93 +1,58 @@
 /*
- * M5 Pomodoro Timer v2 - Renderer Test
+ * M5 Pomodoro Timer v2 - Widget Library Test
  *
- * Testing Renderer with visual patterns and performance metrics
+ * Testing all widgets: Button, StatusBar, ProgressBar, SequenceIndicator, StatsChart
  */
 
 #include <M5Unified.h>
 #include "ui/Renderer.h"
+#include "ui/widgets/Widget.h"
+#include "ui/widgets/Button.h"
+#include "ui/widgets/StatusBar.h"
+#include "ui/widgets/ProgressBar.h"
+#include "ui/widgets/SequenceIndicator.h"
+#include "ui/widgets/StatsChart.h"
 
 Renderer renderer;
 uint32_t lastUpdate = 0;
-uint8_t testMode = 0;
+uint32_t lastSecond = 0;
 
-void drawTestPattern1() {
-    renderer.clear(Renderer::Color(TFT_BLACK));
+// Test widgets
+StatusBar statusBar;
+ProgressBar progressBar;
+SequenceIndicator sequenceIndicator;
+StatsChart statsChart;
+Button button1, button2, button3;
 
-    // Draw rectangles
-    renderer.drawRect(10, 10, 100, 50, Renderer::Color(TFT_RED), true);
-    renderer.drawRect(120, 10, 100, 50, Renderer::Color(TFT_GREEN), false);
-    renderer.drawRect(230, 10, 80, 50, Renderer::Color(TFT_BLUE), true);
+// Test state
+uint8_t progress = 0;
+uint8_t currentSession = 0;
+uint8_t completedSessions = 0;
+bool increasing = true;
+bool chartVisible = false;
 
-    // Draw text
-    renderer.setTextDatum(MC_DATUM);
-    renderer.drawString(160, 80, "Renderer Test", &fonts::Font4, Renderer::Color(TFT_WHITE));
-    renderer.drawString(160, 110, "Pattern 1: Shapes", &fonts::Font2, Renderer::Color(TFT_CYAN));
-
-    // Draw circles
-    renderer.drawCircle(60, 160, 30, Renderer::Color(TFT_YELLOW), false);
-    renderer.drawCircle(160, 160, 30, Renderer::Color(TFT_MAGENTA), true);
-    renderer.drawCircle(260, 160, 30, Renderer::Color(TFT_ORANGE), false);
-
-    // Draw lines
-    renderer.drawLine(10, 210, 100, 230, Renderer::Color(TFT_WHITE));
-    renderer.drawLine(120, 210, 210, 230, Renderer::Color(TFT_CYAN));
-    renderer.drawLine(220, 210, 310, 230, Renderer::Color(TFT_GREEN));
+void onButton1Press() {
+    Serial.println("[Button] Button 1 pressed - Toggle chart");
+    chartVisible = !chartVisible;
+    statsChart.setVisible(chartVisible);
 }
 
-void drawTestPattern2() {
-    renderer.clear(Renderer::Color(TFT_NAVY));
-
-    // Draw title
-    renderer.setTextDatum(MC_DATUM);
-    renderer.drawString(160, 30, "Pattern 2: Animation", &fonts::Font4, Renderer::Color(TFT_WHITE));
-
-    // Animated bouncing rectangle
-    static int16_t x = 50;
-    static int16_t y = 80;
-    static int8_t dx = 2;
-    static int8_t dy = 2;
-
-    const int16_t boxSize = 40;
-
-    // Update position
-    x += dx;
-    y += dy;
-
-    // Bounce off edges
-    if (x < 0 || x + boxSize > 320) dx = -dx;
-    if (y < 50 || y + boxSize > 200) dy = -dy;
-
-    // Draw box
-    renderer.drawRect(x, y, boxSize, boxSize, Renderer::Color(TFT_YELLOW), true);
-
-    // Draw performance info
-    char fpsStr[32];
-    snprintf(fpsStr, sizeof(fpsStr), "FPS: %.1f", renderer.getFPS());
-    renderer.drawString(160, 220, fpsStr, &fonts::Font2, Renderer::Color(TFT_GREEN));
+void onButton2Press() {
+    Serial.println("[Button] Button 2 pressed - Reset progress");
+    progress = 0;
+    progressBar.setProgress(progress);
 }
 
-void drawTestPattern3() {
-    // Partial update test - only redraw timer
-    static uint8_t counter = 0;
-    counter++;
-
-    if (counter % 10 == 0) {
-        // Clear center region only
-        renderer.drawRect(60, 80, 200, 80, Renderer::Color(TFT_BLACK), true);
-
-        // Draw updated timer
-        char timeStr[16];
-        snprintf(timeStr, sizeof(timeStr), "%02d:%02d", (counter / 10) / 60, (counter / 10) % 60);
-        renderer.setTextDatum(MC_DATUM);
-        renderer.drawString(160, 120, timeStr, &fonts::Font6, Renderer::Color(TFT_CYAN));
-
-        // Draw subtitle
-        renderer.drawString(160, 160, "Dirty Rect Optimization", &fonts::Font2, Renderer::Color(TFT_WHITE));
-
-        char updateStr[32];
-        snprintf(updateStr, sizeof(updateStr), "Update: %lu ms", renderer.getLastUpdateMs());
-        renderer.drawString(160, 220, updateStr, &fonts::Font2, Renderer::Color(TFT_GREEN));
+void onButton3Press() {
+    Serial.println("[Button] Button 3 pressed - Next session");
+    if (currentSession < 15) {
+        completedSessions = currentSession;
+        currentSession++;
+        sequenceIndicator.setSession(currentSession, completedSessions);
+    } else {
+        currentSession = 0;
+        completedSessions = 0;
+        sequenceIndicator.setSession(0, 0);
     }
 }
 
@@ -97,7 +62,7 @@ void setup() {
     delay(1000);
 
     Serial.println("\n\n=================================");
-    Serial.println("M5 Pomodoro v2 - Renderer Test");
+    Serial.println("M5 Pomodoro v2 - Widget Test");
     Serial.println("=================================");
 
     // Initialize M5Unified
@@ -126,57 +91,147 @@ void setup() {
     }
 
     Serial.println("[OK] Renderer initialized");
-    Serial.println("\nTest Controls:");
-    Serial.println("- Touch screen to cycle test patterns");
-    Serial.println("- Pattern 1: Static shapes");
-    Serial.println("- Pattern 2: Animation test");
-    Serial.println("- Pattern 3: Dirty rect optimization\n");
+    Serial.println("\nWidget Test Controls:");
+    Serial.println("- Button 1: Toggle chart visibility");
+    Serial.println("- Button 2: Reset progress");
+    Serial.println("- Button 3: Next session\n");
 
-    // Draw initial pattern
-    drawTestPattern1();
-    renderer.update();
+    // Initialize widgets
+    // StatusBar at top
+    statusBar.setBounds(0, 0, 320, 20);
+    statusBar.updateBattery(M5.Power.getBatteryLevel(), false);
+    statusBar.updateWiFi(false);
+    statusBar.updateMode("BAL");
+    statusBar.updateTime(10, 45);
+
+    // ProgressBar
+    progressBar.setBounds(20, 40, 280, 20);
+    progressBar.setColor(Renderer::Color(TFT_RED));
+    progressBar.setProgress(0);
+
+    // SequenceIndicator
+    sequenceIndicator.setBounds(60, 75, 200, 20);
+    sequenceIndicator.setSession(0, 0);
+
+    // Buttons
+    button1.setBounds(20, 110, 70, 40);
+    button1.setLabel("CHART");
+    button1.setCallback(onButton1Press);
+
+    button2.setBounds(125, 110, 70, 40);
+    button2.setLabel("RESET");
+    button2.setCallback(onButton2Press);
+
+    button3.setBounds(230, 110, 70, 40);
+    button3.setLabel("NEXT");
+    button3.setCallback(onButton3Press);
+
+    // StatsChart (hidden initially)
+    statsChart.setBounds(20, 160, 280, 70);
+    statsChart.setVisible(false);
+    uint8_t testData[7] = {3, 5, 4, 7, 6, 2, 4};
+    statsChart.setData(testData);
+
+    Serial.println("[OK] Widgets initialized");
 
     lastUpdate = millis();
+    lastSecond = millis();
 }
 
 void loop() {
     M5.update();
 
-    // Check for touch to cycle test modes
+    // Handle touch events
     auto touch = M5.Touch.getDetail();
     if (touch.wasPressed()) {
-        testMode = (testMode + 1) % 3;
-        Serial.printf("[Test] Switching to pattern %d\n", testMode + 1);
+        int16_t x = touch.x;
+        int16_t y = touch.y;
 
-        // Force full redraw on mode change
-        renderer.clear(Renderer::Color(TFT_BLACK));
+        // Check button hits
+        if (button1.hitTest(x, y)) {
+            button1.onTouch(x, y);
+        } else if (button2.hitTest(x, y)) {
+            button2.onTouch(x, y);
+        } else if (button3.hitTest(x, y)) {
+            button3.onTouch(x, y);
+        }
+    }
+
+    if (touch.wasReleased()) {
+        int16_t x = touch.x;
+        int16_t y = touch.y;
+
+        // Release all buttons
+        button1.onRelease(x, y);
+        button2.onRelease(x, y);
+        button3.onRelease(x, y);
     }
 
     // Update at 30 FPS (~33ms per frame)
     uint32_t now = millis();
-    if (now - lastUpdate >= 33) {
+    uint32_t deltaMs = now - lastUpdate;
+
+    if (deltaMs >= 33) {
         lastUpdate = now;
 
-        // Draw current test pattern
-        switch (testMode) {
-            case 0:
-                // Static pattern (draw once, no updates needed)
-                if (touch.wasPressed()) {
-                    drawTestPattern1();
-                }
-                break;
+        // Update progress bar animation
+        progressBar.update(deltaMs);
+        sequenceIndicator.update(deltaMs);
 
-            case 1:
-                drawTestPattern2();  // Animated
-                break;
+        // Clear screen
+        renderer.clear(Renderer::Color(TFT_BLACK));
 
-            case 2:
-                drawTestPattern3();  // Partial updates
-                break;
+        // Draw all widgets
+        statusBar.draw(renderer);
+        progressBar.draw(renderer);
+        sequenceIndicator.draw(renderer);
+        button1.draw(renderer);
+        button2.draw(renderer);
+        button3.draw(renderer);
+
+        if (chartVisible) {
+            statsChart.draw(renderer);
         }
 
         // Push updates to screen
         renderer.update();
+    }
+
+    // Update test values every second
+    if (now - lastSecond >= 1000) {
+        lastSecond = now;
+
+        // Animate progress
+        if (increasing) {
+            progress += 5;
+            if (progress >= 100) {
+                progress = 100;
+                increasing = false;
+            }
+        } else {
+            if (progress >= 5) {
+                progress -= 5;
+            } else {
+                progress = 0;
+                increasing = true;
+            }
+        }
+        progressBar.setProgress(progress);
+
+        // Update status bar time
+        static uint8_t minute = 45;
+        static uint8_t hour = 10;
+        minute++;
+        if (minute >= 60) {
+            minute = 0;
+            hour = (hour + 1) % 24;
+        }
+        statusBar.updateTime(hour, minute);
+
+        // Update battery (simulate drain)
+        static uint8_t battery = 100;
+        if (battery > 0) battery--;
+        statusBar.updateBattery(battery, false);
     }
 
     delay(1);  // Prevent watchdog
