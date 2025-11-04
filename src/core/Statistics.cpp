@@ -87,9 +87,9 @@ Statistics::DayStats Statistics::getDate(uint32_t epoch_days) const {
 
     DayStats stats;
 
-    // Read from NVS
+    // Read from NVS (need mutable access to prefs)
     size_t len = sizeof(DayStats);
-    if (!prefs.getBytes(key, &stats, len)) {
+    if (!const_cast<Preferences&>(prefs).getBytes(key, &stats, len)) {
         // No data for this day
         return DayStats();
     }
@@ -137,7 +137,7 @@ uint16_t Statistics::getTotalCompleted() const {
 
         DayStats stats;
         size_t len = sizeof(DayStats);
-        if (prefs.getBytes(key, &stats, len)) {
+        if (const_cast<Preferences&>(prefs).getBytes(key, &stats, len)) {
             total += stats.completed_sessions;
         }
     }
