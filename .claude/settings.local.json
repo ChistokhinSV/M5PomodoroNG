@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git init:*)"
+      "Bash(git init:*)",
+      "Bash(pio device list:*)",
+      "Bash(pio run:*)",
+      "Bash(powershell -Command:*)",
+      "Bash(pio pkg:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []
