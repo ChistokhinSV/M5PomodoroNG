@@ -41,15 +41,38 @@ Renderer::~Renderer() {
 bool Renderer::begin() {
     Serial.println("[Renderer] Initializing...");
 
-    // Create sprite in PSRAM (320×240×2 bytes = 153,600 bytes)
-    bool success = canvas.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT);
-    if (!success) {
+    // Check PSRAM availability and memory before sprite creation
+    Serial.printf("[Renderer] Free heap: %d bytes\n", ESP.getFreeHeap());
+    if (psramFound()) {
+        Serial.printf("[Renderer] PSRAM found: %d bytes total, %d bytes free\n",
+                      ESP.getPsramSize(), ESP.getFreePsram());
+    } else {
+        Serial.println("[Renderer] WARNING: PSRAM not detected");
+    }
+
+    // Configure sprite for PSRAM allocation BEFORE creating it
+    canvas.setColorDepth(16);  // RGB565 = 2 bytes per pixel
+    canvas.setPsram(true);     // CRITICAL: Must be called before createSprite()
+
+    // Create full-screen sprite (M5GFX will allocate in PSRAM)
+    Serial.printf("[Renderer] Creating %dx%d sprite in PSRAM...\n", SCREEN_WIDTH, SCREEN_HEIGHT);
+    void* sprite_buffer = canvas.createSprite(SCREEN_WIDTH, SCREEN_HEIGHT);
+    if (!sprite_buffer) {
         Serial.println("[Renderer] ERROR: Failed to create canvas sprite");
+        Serial.printf("[Renderer] Required: %d bytes\n", SCREEN_WIDTH * SCREEN_HEIGHT * 2);
+        Serial.printf("[Renderer] Free heap: %d bytes\n", ESP.getFreeHeap());
+        Serial.printf("[Renderer] Free PSRAM: %d bytes\n", ESP.getFreePsram());
         return false;
     }
 
-    // Use PSRAM for canvas buffer
-    canvas.setPsram(true);
+    Serial.printf("[Renderer] Sprite buffer created at %p\n", sprite_buffer);
+
+    // Verify buffer is in PSRAM (PSRAM addresses: 0x3F800000-0x3FC00000)
+    if ((uint32_t)sprite_buffer >= 0x3F800000 && (uint32_t)sprite_buffer < 0x3FC00000) {
+        Serial.println("[Renderer] ✓ Buffer successfully allocated in PSRAM");
+    } else {
+        Serial.printf("[Renderer] WARNING: Buffer at %p is NOT in PSRAM (heap)\n", sprite_buffer);
+    }
 
     // Initialize canvas
     canvas.fillScreen(TFT_BLACK);
@@ -59,10 +82,11 @@ bool Renderer::begin() {
     // Mark full screen dirty for initial render
     markFullScreenDirty();
 
-    Serial.printf("[Renderer] Initialized: %dx%d canvas in PSRAM\n",
-                  SCREEN_WIDTH, SCREEN_HEIGHT);
-    Serial.printf("[Renderer] Canvas buffer: %d bytes\n",
+    Serial.printf("[Renderer] Initialized: %dx%d canvas (%d bytes)\n",
+                  SCREEN_WIDTH, SCREEN_HEIGHT,
                   SCREEN_WIDTH * SCREEN_HEIGHT * 2);
+    Serial.printf("[Renderer] Free heap after init: %d bytes\n", ESP.getFreeHeap());
+    Serial.printf("[Renderer] Free PSRAM after init: %d bytes\n", ESP.getFreePsram());
 
     return true;
 }

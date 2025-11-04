@@ -111,6 +111,14 @@ void setup() {
 
     Serial.println("[OK] M5Unified initialized");
 
+    // Check PSRAM
+    if (psramFound()) {
+        Serial.printf("[OK] PSRAM detected: %d bytes total, %d bytes free\n",
+                      ESP.getPsramSize(), ESP.getFreePsram());
+    } else {
+        Serial.println("[WARNING] PSRAM not detected!");
+    }
+
     // Initialize Renderer
     if (!renderer.begin()) {
         Serial.println("[ERROR] Renderer initialization failed!");
