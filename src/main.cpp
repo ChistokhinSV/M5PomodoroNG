@@ -1,27 +1,23 @@
 /*
- * M5 Pomodoro Timer v2 - Pause Screen Test
+ * M5 Pomodoro Timer v2 - Settings Screen Test
  *
- * Testing PauseScreen with timer state machine in PAUSED state
+ * Testing SettingsScreen with 16 configurable options across 3 pages
  */
 
 #include <M5Unified.h>
 #include "ui/Renderer.h"
-#include "ui/screens/PauseScreen.h"
-#include "core/TimerStateMachine.h"
-#include "core/PomodoroSequence.h"
-#include "hardware/LEDController.h"
+#include "ui/screens/SettingsScreen.h"
+#include "core/Config.h"
 
 Renderer renderer;
 uint32_t lastUpdate = 0;
 uint32_t lastSecond = 0;
 
 // Core components
-PomodoroSequence sequence;
-TimerStateMachine stateMachine(sequence);
-LEDController ledController;
+Config config;
 
-// Pause screen
-PauseScreen pauseScreen(stateMachine, ledController);
+// Settings screen
+SettingsScreen settingsScreen(config);
 
 void setup() {
     // Initialize M5
@@ -32,7 +28,7 @@ void setup() {
     delay(100);
 
     Serial.println("\n=================================");
-    Serial.println("M5 Pomodoro v2 - Pause Screen Test");
+    Serial.println("M5 Pomodoro v2 - Settings Screen Test");
     Serial.println("=================================");
 
     // Check PSRAM
@@ -52,48 +48,52 @@ void setup() {
     }
     Serial.println("[OK] Renderer initialized");
 
-    // Initialize LED controller
-    if (!ledController.begin()) {
-        Serial.println("[ERROR] Failed to initialize LED controller");
+    // Initialize config
+    if (!config.begin()) {
+        Serial.println("[ERROR] Failed to initialize config");
     } else {
-        Serial.println("[OK] LED controller initialized");
+        Serial.println("[OK] Config initialized");
     }
 
-    // Initialize sequence and state machine
-    sequence.setMode(PomodoroSequence::Mode::CLASSIC);
-    sequence.start();
-    Serial.println("[OK] Pomodoro sequence initialized (Classic mode)");
+    // Print current config values
+    Serial.println("\n[Config] Current settings:");
+    auto pomodoro = config.getPomodoro();
+    Serial.printf("  Work: %d min, Short break: %d min, Long break: %d min\n",
+                 pomodoro.work_duration_min, pomodoro.short_break_min,
+                 pomodoro.long_break_min);
+    Serial.printf("  Sessions: %d, Auto-start breaks: %s, Auto-start work: %s\n",
+                 pomodoro.sessions_before_long,
+                 pomodoro.auto_start_breaks ? "ON" : "OFF",
+                 pomodoro.auto_start_work ? "ON" : "OFF");
 
-    // Start a timer and immediately pause it
-    Serial.println("[Test] Starting timer...");
-    stateMachine.handleEvent(TimerStateMachine::Event::START);
+    auto ui = config.getUI();
+    Serial.printf("  Brightness: %d%%, Sound: %s, Volume: %d%%\n",
+                 ui.brightness, ui.sound_enabled ? "ON" : "OFF", ui.sound_volume);
+    Serial.printf("  Haptic: %s, Show seconds: %s, Timeout: %ds\n",
+                 ui.haptic_enabled ? "ON" : "OFF",
+                 ui.show_seconds ? "ON" : "OFF",
+                 ui.screen_timeout_sec);
 
-    delay(100);  // Let it run briefly
+    auto power = config.getPower();
+    Serial.printf("  Auto-sleep: %s, Sleep after: %d min\n",
+                 power.auto_sleep_enabled ? "ON" : "OFF",
+                 power.sleep_after_min);
+    Serial.printf("  Wake on rotation: %s, Min battery: %d%%\n",
+                 power.wake_on_rotation ? "ON" : "OFF",
+                 power.min_battery_percent);
 
-    Serial.println("[Test] Pausing timer...");
-    stateMachine.handleEvent(TimerStateMachine::Event::PAUSE);
-
-    // Verify we're in PAUSED state
-    auto state = stateMachine.getState();
-    if (state == TimerStateMachine::State::PAUSED) {
-        Serial.println("[OK] Timer is PAUSED");
-
-        uint8_t minutes, seconds;
-        stateMachine.getRemainingTime(minutes, seconds);
-        Serial.printf("[Test] Frozen time: %02d:%02d\n", minutes, seconds);
-    } else {
-        Serial.println("[ERROR] Timer not in PAUSED state!");
-    }
-
-    // Update pause screen status
+    // Update settings screen status
     uint8_t battery = M5.Power.getBatteryLevel();
     bool charging = M5.Power.isCharging();
-    pauseScreen.updateStatus(battery, charging, false, "PAU", 10, 45);
+    settingsScreen.updateStatus(battery, charging, false, "SET", 10, 45);
 
     Serial.println("\nControls:");
-    Serial.println("- Touch 'Resume' button (left) to resume timer");
-    Serial.println("- Touch 'Stop' button (right) to stop and reset");
-    Serial.println("\n[OK] Pause screen initialized\n");
+    Serial.println("- Touch 'Prev' / 'Next' to navigate pages (3 pages)");
+    Serial.println("- Touch '<- Back' to save and exit");
+    Serial.println("- Touch 'Reset' (page 2) to reset to defaults");
+    Serial.println("- Touch sliders to adjust values");
+    Serial.println("- Touch toggles to flip ON/OFF");
+    Serial.println("\n[OK] Settings screen initialized\n");
 
     lastUpdate = millis();
     lastSecond = millis();
@@ -106,11 +106,11 @@ void loop() {
     auto touch = M5.Touch.getDetail();
 
     if (touch.wasPressed()) {
-        pauseScreen.handleTouch(touch.x, touch.y, true);
+        settingsScreen.handleTouch(touch.x, touch.y, true);
     }
 
     if (touch.wasReleased()) {
-        pauseScreen.handleTouch(touch.x, touch.y, false);
+        settingsScreen.handleTouch(touch.x, touch.y, false);
     }
 
     // Update at 30 FPS (~33ms per frame)
@@ -120,17 +120,11 @@ void loop() {
     if (deltaMs >= 33) {
         lastUpdate = now;
 
-        // Update state machine (maintains paused state)
-        stateMachine.update(deltaMs);
-
-        // Update LED controller (no deltaMs parameter)
-        ledController.update();
-
-        // Update pause screen
-        pauseScreen.update(deltaMs);
+        // Update settings screen
+        settingsScreen.update(deltaMs);
 
         // Draw
-        pauseScreen.draw(renderer);
+        settingsScreen.draw(renderer);
 
         // Push to display
         renderer.update();
@@ -153,23 +147,7 @@ void loop() {
             hour = (hour + 1) % 24;
         }
 
-        // Update mode based on state
-        const char* mode = "PAU";
-        auto state = stateMachine.getState();
-        if (state == TimerStateMachine::State::RUNNING) {
-            mode = "RUN";
-        } else if (state == TimerStateMachine::State::IDLE) {
-            mode = "IDL";
-        }
-
-        pauseScreen.updateStatus(battery, charging, false, mode, hour, minute);
-
-        // Log state changes
-        static TimerStateMachine::State last_state = TimerStateMachine::State::PAUSED;
-        if (state != last_state) {
-            Serial.printf("[State Change] %d -> %d\n", (int)last_state, (int)state);
-            last_state = state;
-        }
+        settingsScreen.updateStatus(battery, charging, false, "SET", hour, minute);
     }
 
     delay(1);  // Prevent watchdog

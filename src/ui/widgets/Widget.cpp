@@ -28,3 +28,14 @@ void Widget::setBounds(int16_t x, int16_t y, int16_t w, int16_t h) {
     bounds_.h = h;
     markDirty();
 }
+
+void Widget::setMargin(int16_t top, int16_t bottom) {
+    margin_top_ = top;
+    margin_bottom_ = bottom;
+    markDirty();
+}
+
+void Widget::setMarginBottom(int16_t bottom) {
+    margin_bottom_ = bottom;
+    markDirty();
+}
