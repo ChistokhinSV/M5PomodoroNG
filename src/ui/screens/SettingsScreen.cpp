@@ -1,4 +1,5 @@
 #include "SettingsScreen.h"
+#include "../ScreenManager.h"
 #include <M5Unified.h>
 #include <stdio.h>
 
@@ -430,7 +431,10 @@ void SettingsScreen::onBackPress() {
     instance_->config_.save();
     Serial.println("[SettingsScreen] Back button pressed, config saved");
 
-    instance_->needs_redraw_ = true;
+    // Navigate back to main screen
+    if (g_navigate_callback) {
+        g_navigate_callback(ScreenID::MAIN);
+    }
 }
 
 void SettingsScreen::onPrevPress() {

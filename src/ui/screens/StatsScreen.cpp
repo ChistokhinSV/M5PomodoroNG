@@ -1,4 +1,5 @@
 #include "StatsScreen.h"
+#include "../ScreenManager.h"
 #include <M5Unified.h>
 #include <stdio.h>
 
@@ -186,8 +187,8 @@ void StatsScreen::drawLifetimeStats(Renderer& renderer) {
 void StatsScreen::onBackPress() {
     if (!instance_) return;
 
-    // TODO: Navigate back to main screen (awaits MP-21 Screen Manager)
-    Serial.println("[StatsScreen] Back button pressed (not implemented yet)");
-
-    instance_->needs_redraw_ = true;
+    // Navigate back to main screen
+    if (g_navigate_callback) {
+        g_navigate_callback(ScreenID::MAIN);
+    }
 }

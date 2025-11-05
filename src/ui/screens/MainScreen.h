@@ -46,6 +46,7 @@ public:
     // Configuration
     void setTaskName(const char* task);
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
+    void markDirty() { needs_redraw_ = true; }
 
 private:
     TimerStateMachine& state_machine_;
@@ -59,6 +60,7 @@ private:
     Button btn_pause_;
     Button btn_stop_;
     Button btn_stats_;
+    Button btn_settings_;
 
     // State
     char task_name_[64];
@@ -87,6 +89,7 @@ private:
     static void onPausePress();
     static void onStopPress();
     static void onStatsPress();
+    static void onSettingsPress();
 
     // Static instance pointer for callbacks
     static MainScreen* instance_;

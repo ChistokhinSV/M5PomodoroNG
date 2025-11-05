@@ -49,6 +49,7 @@ public:
 
     // Configuration
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
+    void markDirty() { needs_redraw_ = true; }
 
 private:
     Config& config_;

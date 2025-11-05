@@ -1,4 +1,5 @@
 #include "MainScreen.h"
+#include "../ScreenManager.h"
 #include <M5Unified.h>
 #include <stdio.h>
 #include <string.h>
@@ -31,24 +32,28 @@ MainScreen::MainScreen(TimerStateMachine& state_machine, PomodoroSequence& seque
     progress_bar_.setShowPercentage(false);  // Don't show percentage on timer progress
     progress_bar_.setColor(Renderer::Color(TFT_RED));
 
-    // Buttons at bottom (70×40 each, with spacing)
+    // Buttons at bottom (5 buttons, compact layout)
     int16_t button_y = SCREEN_HEIGHT - BUTTON_HEIGHT - 10;
-    btn_start_.setBounds(20, button_y, 70, BUTTON_HEIGHT);
+    btn_start_.setBounds(10, button_y, 60, BUTTON_HEIGHT);
     btn_start_.setLabel("Start");
     btn_start_.setCallback(onStartPress);
 
-    btn_pause_.setBounds(100, button_y, 70, BUTTON_HEIGHT);
+    btn_pause_.setBounds(75, button_y, 60, BUTTON_HEIGHT);
     btn_pause_.setLabel("Pause");
     btn_pause_.setCallback(onPausePress);
     btn_pause_.setVisible(false);  // Hidden until timer starts
 
-    btn_stop_.setBounds(180, button_y, 60, BUTTON_HEIGHT);
+    btn_stop_.setBounds(140, button_y, 50, BUTTON_HEIGHT);
     btn_stop_.setLabel("Stop");
     btn_stop_.setCallback(onStopPress);
 
-    btn_stats_.setBounds(250, button_y, 60, BUTTON_HEIGHT);
+    btn_stats_.setBounds(195, button_y, 55, BUTTON_HEIGHT);
     btn_stats_.setLabel("Stats");
     btn_stats_.setCallback(onStatsPress);
+
+    btn_settings_.setBounds(255, button_y, 55, BUTTON_HEIGHT);
+    btn_settings_.setLabel("Set");
+    btn_settings_.setCallback(onSettingsPress);
 }
 
 void MainScreen::setTaskName(const char* task) {
@@ -119,6 +124,7 @@ void MainScreen::draw(Renderer& renderer) {
     btn_pause_.draw(renderer);
     btn_stop_.draw(renderer);
     btn_stats_.draw(renderer);
+    btn_settings_.draw(renderer);
 
     needs_redraw_ = false;
 }
@@ -134,6 +140,8 @@ void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
             btn_stop_.onTouch(x, y);
         } else if (btn_stats_.hitTest(x, y)) {
             btn_stats_.onTouch(x, y);
+        } else if (btn_settings_.hitTest(x, y)) {
+            btn_settings_.onTouch(x, y);
         }
     } else {
         // Touch up - release all buttons
@@ -141,6 +149,7 @@ void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
         btn_pause_.onRelease(x, y);
         btn_stop_.onRelease(x, y);
         btn_stats_.onRelease(x, y);
+        btn_settings_.onRelease(x, y);
     }
 }
 
@@ -308,6 +317,17 @@ void MainScreen::onStopPress() {
 void MainScreen::onStatsPress() {
     if (!instance_) return;
 
-    // TODO: Navigate to statistics screen (MP-18 + MP-21)
-    Serial.println("[MainScreen] Stats button pressed (not implemented yet)");
+    // Navigate to statistics screen
+    if (g_navigate_callback) {
+        g_navigate_callback(ScreenID::STATS);
+    }
+}
+
+void MainScreen::onSettingsPress() {
+    if (!instance_) return;
+
+    // Navigate to settings screen
+    if (g_navigate_callback) {
+        g_navigate_callback(ScreenID::SETTINGS);
+    }
 }
