@@ -137,6 +137,7 @@ private:
     void onModeStudy();
     void onModeCustom();
     void updateModeHighlights();  // Update button colors based on active mode
+    void updateCustomButtonLabel();  // Update Custom button label with current template values
 
     void onBrightnessChange(uint16_t value);
     void onSoundChange(bool state);

@@ -61,7 +61,7 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     button_mode_study_.setCallback([this]() { this->onModeStudy(); });
 
     button_mode_custom_.setBounds(btn_x + 2 * (btn_width + btn_gap), y, btn_width, btn_height);
-    button_mode_custom_.setLabel("Custom", "15/3/10");
+    button_mode_custom_.setLabel("Custom", "...");  // Will be updated in loadFromConfig()
     button_mode_custom_.setCallback([this]() { this->onModeCustom(); });
 
     // Page 1: Timer settings (1 slider + 2 toggles)
@@ -188,7 +188,8 @@ void SettingsScreen::loadFromConfig() {
     toggle_wake_rotation_.setState(power.wake_on_rotation);
     slider_min_battery_.setValue(power.min_battery_percent);
 
-    // MP-50: Set initial mode button highlights
+    // MP-50: Set initial mode button highlights and custom label
+    updateCustomButtonLabel();
     updateModeHighlights();
 }
 
@@ -398,21 +399,48 @@ void SettingsScreen::drawPage4(Renderer& renderer) {
 void SettingsScreen::onWorkDurationChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.work_duration_min = value;
+
+    // MP-50: Save to custom template if not Classic or Study
+    bool is_classic = (value == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
+    bool is_study = (value == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    if (!is_classic && !is_study) {
+        pomodoro.custom_work_min = value;
+    }
+
     config_.setPomodoro(pomodoro);
+    updateCustomButtonLabel();  // MP-50: Update Custom button label
     updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onShortBreakChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.short_break_min = value;
+
+    // MP-50: Save to custom template if not Classic or Study
+    bool is_classic = (pomodoro.work_duration_min == 25 && value == 5 && pomodoro.long_break_min == 15);
+    bool is_study = (pomodoro.work_duration_min == 45 && value == 15 && pomodoro.long_break_min == 30);
+    if (!is_classic && !is_study) {
+        pomodoro.custom_short_break_min = value;
+    }
+
     config_.setPomodoro(pomodoro);
+    updateCustomButtonLabel();  // MP-50: Update Custom button label
     updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onLongBreakChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.long_break_min = value;
+
+    // MP-50: Save to custom template if not Classic or Study
+    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && value == 15);
+    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && value == 30);
+    if (!is_classic && !is_study) {
+        pomodoro.custom_long_break_min = value;
+    }
+
     config_.setPomodoro(pomodoro);
+    updateCustomButtonLabel();  // MP-50: Update Custom button label
     updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
@@ -521,6 +549,7 @@ void SettingsScreen::onModeClassic() {
     slider_short_break_.setValue(5);
     slider_long_break_.setValue(15);
 
+    updateCustomButtonLabel();  // Update Custom button with saved template
     updateModeHighlights();
 }
 
@@ -548,6 +577,7 @@ void SettingsScreen::onModeStudy() {
     slider_short_break_.setValue(15);
     slider_long_break_.setValue(30);
 
+    updateCustomButtonLabel();  // Update Custom button with saved template
     updateModeHighlights();
 }
 
@@ -567,6 +597,17 @@ void SettingsScreen::onModeCustom() {
     slider_long_break_.setValue(pomodoro.custom_long_break_min);
 
     updateModeHighlights();
+}
+
+void SettingsScreen::updateCustomButtonLabel() {
+    // Update Custom button label with current custom template values
+    auto pomodoro = config_.getPomodoro();
+    char label[16];
+    snprintf(label, sizeof(label), "%d/%d/%d",
+             pomodoro.custom_work_min,
+             pomodoro.custom_short_break_min,
+             pomodoro.custom_long_break_min);
+    button_mode_custom_.setLabel("Custom", label);
 }
 
 void SettingsScreen::updateModeHighlights() {
