@@ -70,10 +70,15 @@ private:
     // Widgets
     StatusBar status_bar_;
 
-    // Page 0: Timer settings (6 widgets)
+    // Page 0: Timer settings (3 sliders + 3 mode buttons) - MP-50
     Slider slider_work_duration_;
     Slider slider_short_break_;
     Slider slider_long_break_;
+    Button button_mode_classic_;   // MP-50: Classic preset (25/5/15)
+    Button button_mode_study_;     // MP-50: Study preset (45/15/30)
+    Button button_mode_custom_;    // MP-50: Custom preset (user-defined)
+
+    // Page 1: Timer settings (1 slider + 2 toggles)
     Slider slider_sessions_;
     Toggle toggle_auto_break_;
     Toggle toggle_auto_work_;
@@ -126,6 +131,12 @@ private:
     void onSessionsChange(uint16_t value);
     void onAutoBreakChange(bool state);
     void onAutoWorkChange(bool state);
+
+    // Mode preset callbacks (MP-50)
+    void onModeClassic();
+    void onModeStudy();
+    void onModeCustom();
+    void updateModeHighlights();  // Update button colors based on active mode
 
     void onBrightnessChange(uint16_t value);
     void onSoundChange(bool state);

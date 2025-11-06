@@ -2,12 +2,13 @@
 #define BUTTON_H
 
 #include "Widget.h"
+#include <functional>
 
 /**
  * Touch button widget with text label
  *
  * Features:
- * - Text label (centered)
+ * - Text label (centered, 1 or 2 lines)
  * - Visual feedback on press (color change)
  * - Rounded corners (4px radius)
  * - Optional callback on press
@@ -22,7 +23,8 @@ public:
 
     // Configuration
     void setLabel(const char* label);
-    void setCallback(void (*callback)());
+    void setLabel(const char* line1, const char* line2);  // NEW: 2-line label
+    void setCallback(std::function<void()> callback);  // MP-50: Support lambdas
     void setColors(Renderer::Color normal, Renderer::Color pressed);
 
     // Widget interface
@@ -32,7 +34,8 @@ public:
 
 private:
     char label_[16];
-    void (*callback_)();
+    char label_line2_[16];  // NEW: Second line (empty = single-line mode)
+    std::function<void()> callback_;  // MP-50: Support lambdas
     bool pressed_;
 
     Renderer::Color normal_color_;

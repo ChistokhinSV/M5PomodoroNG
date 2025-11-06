@@ -122,16 +122,23 @@ void setup() {
     // Initialize state machine and sequence
     auto pomodoro_config = g_config->getPomodoro();
 
-    // Detect mode based on config values
+    // Detect mode based on config values (MP-50)
     PomodoroSequence::Mode mode = PomodoroSequence::Mode::CLASSIC;
-    if (pomodoro_config.sessions_before_long != 4 ||
-        pomodoro_config.work_duration_min != 25 ||
-        pomodoro_config.short_break_min != 5 ||
-        pomodoro_config.long_break_min != 15) {
-        mode = PomodoroSequence::Mode::CUSTOM;
-        Serial.println("[Config] Using CUSTOM mode (non-default values)");
+    if (pomodoro_config.work_duration_min == 25 &&
+        pomodoro_config.short_break_min == 5 &&
+        pomodoro_config.long_break_min == 15 &&
+        pomodoro_config.sessions_before_long == 4) {
+        mode = PomodoroSequence::Mode::CLASSIC;
+        Serial.println("[Config] Using CLASSIC mode (25/5/15)");
+    } else if (pomodoro_config.work_duration_min == 45 &&
+               pomodoro_config.short_break_min == 15 &&
+               pomodoro_config.long_break_min == 30 &&
+               pomodoro_config.sessions_before_long == 4) {
+        mode = PomodoroSequence::Mode::STUDY;
+        Serial.println("[Config] Using STUDY mode (45/15/30)");
     } else {
-        Serial.println("[Config] Using CLASSIC mode (default values)");
+        mode = PomodoroSequence::Mode::CUSTOM;
+        Serial.println("[Config] Using CUSTOM mode (user-defined)");
     }
 
     g_sequence->setMode(mode);

@@ -53,6 +53,9 @@ bool Config::load() {
     pomodoro.sessions_before_long = prefs.getUChar("pom_sessions", 4);
     pomodoro.auto_start_breaks = prefs.getBool("pom_auto_brk", true);
     pomodoro.auto_start_work = prefs.getBool("pom_auto_wrk", false);
+    pomodoro.custom_work_min = prefs.getUShort("pom_cust_w", 15);
+    pomodoro.custom_short_break_min = prefs.getUShort("pom_cust_s", 3);
+    pomodoro.custom_long_break_min = prefs.getUShort("pom_cust_l", 10);
 
     // Load UI settings
     ui.brightness = prefs.getUChar("ui_bright", 80);
@@ -100,6 +103,9 @@ bool Config::save() {
     prefs.putUChar("pom_sessions", pomodoro.sessions_before_long);
     prefs.putBool("pom_auto_brk", pomodoro.auto_start_breaks);
     prefs.putBool("pom_auto_wrk", pomodoro.auto_start_work);
+    prefs.putUShort("pom_cust_w", pomodoro.custom_work_min);
+    prefs.putUShort("pom_cust_s", pomodoro.custom_short_break_min);
+    prefs.putUShort("pom_cust_l", pomodoro.custom_long_break_min);
 
     // Save UI settings
     prefs.putUChar("ui_bright", ui.brightness);

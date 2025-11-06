@@ -32,7 +32,7 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
 
     slider_short_break_.setBounds(10, y, 300, WIDGET_HEIGHT);
     slider_short_break_.setLabel("Short Break:");
-    slider_short_break_.setRange(1, 10);
+    slider_short_break_.setRange(1, 15);  // MP-50: Increased from 10 to support Study mode
     slider_short_break_.setDisplayMode(Slider::DisplayMode::TIME_MIN);
     slider_short_break_.setCallback([this](uint16_t val) { this->onShortBreakChange(val); });
     slider_short_break_.setMarginBottom(10);
@@ -44,6 +44,25 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     slider_long_break_.setDisplayMode(Slider::DisplayMode::TIME_MIN);
     slider_long_break_.setCallback([this](uint16_t val) { this->onLongBreakChange(val); });
     slider_long_break_.setMarginBottom(10);
+    y += slider_long_break_.getTotalHeight();
+
+    // MP-50: Mode preset buttons (3 buttons × 100px, 4px gaps, Y=176)
+    int16_t btn_width = 100;
+    int16_t btn_height = 40;
+    int16_t btn_gap = 4;
+    int16_t btn_x = 6;  // Left margin
+
+    button_mode_classic_.setBounds(btn_x, y, btn_width, btn_height);
+    button_mode_classic_.setLabel("Classic", "25/5/15");
+    button_mode_classic_.setCallback([this]() { this->onModeClassic(); });
+
+    button_mode_study_.setBounds(btn_x + btn_width + btn_gap, y, btn_width, btn_height);
+    button_mode_study_.setLabel("Study", "45/15/30");
+    button_mode_study_.setCallback([this]() { this->onModeStudy(); });
+
+    button_mode_custom_.setBounds(btn_x + 2 * (btn_width + btn_gap), y, btn_width, btn_height);
+    button_mode_custom_.setLabel("Custom", "15/3/10");
+    button_mode_custom_.setCallback([this]() { this->onModeCustom(); });
 
     // Page 1: Timer settings (1 slider + 2 toggles)
     y = widget_start_y;
@@ -168,6 +187,9 @@ void SettingsScreen::loadFromConfig() {
     slider_sleep_after_.setValue(power.sleep_after_min);
     toggle_wake_rotation_.setState(power.wake_on_rotation);
     slider_min_battery_.setValue(power.min_battery_percent);
+
+    // MP-50: Set initial mode button highlights
+    updateModeHighlights();
 }
 
 void SettingsScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
@@ -186,6 +208,9 @@ void SettingsScreen::update(uint32_t deltaMs) {
         slider_work_duration_.update(deltaMs);
         slider_short_break_.update(deltaMs);
         slider_long_break_.update(deltaMs);
+        button_mode_classic_.update(deltaMs);  // MP-50
+        button_mode_study_.update(deltaMs);    // MP-50
+        button_mode_custom_.update(deltaMs);   // MP-50
     } else if (current_page_ == 1) {
         slider_sessions_.update(deltaMs);
         toggle_auto_break_.update(deltaMs);
@@ -246,6 +271,9 @@ void SettingsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
             if (slider_work_duration_.hitTest(x, y)) slider_work_duration_.onTouch(x, y);
             else if (slider_short_break_.hitTest(x, y)) slider_short_break_.onTouch(x, y);
             else if (slider_long_break_.hitTest(x, y)) slider_long_break_.onTouch(x, y);
+            else if (button_mode_classic_.hitTest(x, y)) button_mode_classic_.onTouch(x, y);  // MP-50
+            else if (button_mode_study_.hitTest(x, y)) button_mode_study_.onTouch(x, y);      // MP-50
+            else if (button_mode_custom_.hitTest(x, y)) button_mode_custom_.onTouch(x, y);    // MP-50
         } else if (current_page_ == 1) {
             if (slider_sessions_.hitTest(x, y)) slider_sessions_.onTouch(x, y);
             else if (toggle_auto_break_.hitTest(x, y)) toggle_auto_break_.onTouch(x, y);
@@ -270,6 +298,9 @@ void SettingsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
             slider_work_duration_.onRelease(x, y);
             slider_short_break_.onRelease(x, y);
             slider_long_break_.onRelease(x, y);
+            button_mode_classic_.onRelease(x, y);  // MP-50
+            button_mode_study_.onRelease(x, y);    // MP-50
+            button_mode_custom_.onRelease(x, y);   // MP-50
         } else if (current_page_ == 1) {
             slider_sessions_.onRelease(x, y);
             toggle_auto_break_.onRelease(x, y);
@@ -325,10 +356,13 @@ void SettingsScreen::drawPageIndicator(Renderer& renderer) {
 }
 
 void SettingsScreen::drawPage0(Renderer& renderer) {
-    // Page 0: Timer settings (3 sliders)
+    // Page 0: Timer settings (3 sliders + 3 mode buttons) - MP-50
     slider_work_duration_.draw(renderer);
     slider_short_break_.draw(renderer);
     slider_long_break_.draw(renderer);
+    button_mode_classic_.draw(renderer);
+    button_mode_study_.draw(renderer);
+    button_mode_custom_.draw(renderer);
 }
 
 void SettingsScreen::drawPage1(Renderer& renderer) {
@@ -365,18 +399,21 @@ void SettingsScreen::onWorkDurationChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.work_duration_min = value;
     config_.setPomodoro(pomodoro);
+    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onShortBreakChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.short_break_min = value;
     config_.setPomodoro(pomodoro);
+    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onLongBreakChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.long_break_min = value;
     config_.setPomodoro(pomodoro);
+    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onSessionsChange(uint16_t value) {
@@ -457,6 +494,106 @@ void SettingsScreen::onMinBatteryChange(uint16_t value) {
     auto power = config_.getPower();
     power.min_battery_percent = value;
     config_.setPower(power);
+}
+
+// MP-50: Mode preset callbacks
+void SettingsScreen::onModeClassic() {
+    Serial.println("[SettingsScreen] Mode: Classic (25/5/15)");
+    auto pomodoro = config_.getPomodoro();
+
+    // Save current values to custom template if they don't match Classic or Study
+    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
+    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    if (!is_classic && !is_study) {
+        pomodoro.custom_work_min = pomodoro.work_duration_min;
+        pomodoro.custom_short_break_min = pomodoro.short_break_min;
+        pomodoro.custom_long_break_min = pomodoro.long_break_min;
+    }
+
+    // Apply Classic preset
+    pomodoro.work_duration_min = 25;
+    pomodoro.short_break_min = 5;
+    pomodoro.long_break_min = 15;
+    config_.setPomodoro(pomodoro);
+
+    // Update UI sliders
+    slider_work_duration_.setValue(25);
+    slider_short_break_.setValue(5);
+    slider_long_break_.setValue(15);
+
+    updateModeHighlights();
+}
+
+void SettingsScreen::onModeStudy() {
+    Serial.println("[SettingsScreen] Mode: Study (45/15/30)");
+    auto pomodoro = config_.getPomodoro();
+
+    // Save current values to custom template if they don't match Classic or Study
+    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
+    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    if (!is_classic && !is_study) {
+        pomodoro.custom_work_min = pomodoro.work_duration_min;
+        pomodoro.custom_short_break_min = pomodoro.short_break_min;
+        pomodoro.custom_long_break_min = pomodoro.long_break_min;
+    }
+
+    // Apply Study preset
+    pomodoro.work_duration_min = 45;
+    pomodoro.short_break_min = 15;
+    pomodoro.long_break_min = 30;
+    config_.setPomodoro(pomodoro);
+
+    // Update UI sliders
+    slider_work_duration_.setValue(45);
+    slider_short_break_.setValue(15);
+    slider_long_break_.setValue(30);
+
+    updateModeHighlights();
+}
+
+void SettingsScreen::onModeCustom() {
+    Serial.println("[SettingsScreen] Mode: Custom (restore template)");
+    auto pomodoro = config_.getPomodoro();
+
+    // Restore from custom template
+    pomodoro.work_duration_min = pomodoro.custom_work_min;
+    pomodoro.short_break_min = pomodoro.custom_short_break_min;
+    pomodoro.long_break_min = pomodoro.custom_long_break_min;
+    config_.setPomodoro(pomodoro);
+
+    // Update UI sliders
+    slider_work_duration_.setValue(pomodoro.custom_work_min);
+    slider_short_break_.setValue(pomodoro.custom_short_break_min);
+    slider_long_break_.setValue(pomodoro.custom_long_break_min);
+
+    updateModeHighlights();
+}
+
+void SettingsScreen::updateModeHighlights() {
+    // Detect current mode based on slider values
+    auto pomodoro = config_.getPomodoro();
+    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
+    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+
+    // Set button colors (highlighted = green, normal = blue)
+    Renderer::Color green = Renderer::Color(0x2ECC71);   // Highlighted
+    Renderer::Color blue = Renderer::Color(0x4A90E2);    // Normal
+    Renderer::Color green_pressed = Renderer::Color(0x27AE60);
+    Renderer::Color blue_pressed = Renderer::Color(0x2E5C8A);
+
+    if (is_classic) {
+        button_mode_classic_.setColors(green, green_pressed);
+        button_mode_study_.setColors(blue, blue_pressed);
+        button_mode_custom_.setColors(blue, blue_pressed);
+    } else if (is_study) {
+        button_mode_classic_.setColors(blue, blue_pressed);
+        button_mode_study_.setColors(green, green_pressed);
+        button_mode_custom_.setColors(blue, blue_pressed);
+    } else {
+        button_mode_classic_.setColors(blue, blue_pressed);
+        button_mode_study_.setColors(blue, blue_pressed);
+        button_mode_custom_.setColors(green, green_pressed);
+    }
 }
 
 // Hardware button interface implementation

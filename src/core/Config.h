@@ -23,6 +23,11 @@ public:
         uint8_t sessions_before_long = 4;      // Classic: 4 sessions
         bool auto_start_breaks = true;
         bool auto_start_work = false;
+
+        // Custom mode template (MP-50)
+        uint16_t custom_work_min = 15;         // Custom default: 15min
+        uint16_t custom_short_break_min = 3;   // Custom default: 3min
+        uint16_t custom_long_break_min = 10;   // Custom default: 10min
     };
 
     // UI preferences

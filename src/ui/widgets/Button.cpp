@@ -3,12 +3,12 @@
 #include <string.h>
 
 Button::Button()
-    : callback_(nullptr),
-      pressed_(false),
+    : pressed_(false),
       normal_color_(Renderer::Color(0x4A90E2)),    // Blue
       pressed_color_(Renderer::Color(0x2E5C8A)),   // Darker blue
       text_color_(Renderer::Color(TFT_WHITE)) {
     label_[0] = '\0';
+    label_line2_[0] = '\0';
 }
 
 Button::Button(const char* label)
@@ -24,7 +24,19 @@ void Button::setLabel(const char* label) {
     }
 }
 
-void Button::setCallback(void (*callback)()) {
+void Button::setLabel(const char* line1, const char* line2) {
+    if (line1) {
+        strncpy(label_, line1, sizeof(label_) - 1);
+        label_[sizeof(label_) - 1] = '\0';
+    }
+    if (line2) {
+        strncpy(label_line2_, line2, sizeof(label_line2_) - 1);
+        label_line2_[sizeof(label_line2_) - 1] = '\0';
+    }
+    markDirty();
+}
+
+void Button::setCallback(std::function<void()> callback) {
     callback_ = callback;
 }
 
@@ -51,12 +63,20 @@ void Button::draw(Renderer& renderer) {
                          Renderer::Color(TFT_WHITE), false);
     }
 
-    // Draw label (centered)
+    // Draw label (centered, 1 or 2 lines)
     if (label_[0] != '\0') {
         renderer.setTextDatum(MC_DATUM);  // Middle-center
         int16_t center_x = bounds_.x + bounds_.w / 2;
         int16_t center_y = bounds_.y + bounds_.h / 2;
-        renderer.drawString(center_x, center_y, label_, &fonts::Font2, text_color_);
+
+        if (label_line2_[0] != '\0') {
+            // Two-line mode: draw line 1 above center, line 2 below
+            renderer.drawString(center_x, center_y - 8, label_, &fonts::Font2, text_color_);
+            renderer.drawString(center_x, center_y + 8, label_line2_, &fonts::Font2, text_color_);
+        } else {
+            // Single-line mode: draw at center
+            renderer.drawString(center_x, center_y, label_, &fonts::Font2, text_color_);
+        }
     }
 
     clearDirty();
