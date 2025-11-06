@@ -146,10 +146,7 @@ void MainScreen::drawModeLabel(Renderer& renderer) {
     }
 
     const char* mode_name = "Classic";
-    PomodoroSequence::Mode current_mode = sequence_.getMode();
-    Serial.printf("[MainScreen] drawModeLabel: getMode() returns %d (0=CLASSIC, 1=STUDY, 2=CUSTOM)\n", (int)current_mode);
-
-    switch (current_mode) {
+    switch (sequence_.getMode()) {
         case PomodoroSequence::Mode::CLASSIC:
             mode_name = "Classic";
             break;
