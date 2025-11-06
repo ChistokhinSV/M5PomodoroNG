@@ -1,8 +1,8 @@
 #include "AudioPlayer.h"
 #include <Arduino.h>
 
-// Sound file path mapping
-constexpr const char* AudioPlayer::SOUND_PATHS[];
+// Include embedded audio data
+#include "audio_data.cpp"
 
 AudioPlayer::AudioPlayer()
     : current_volume(70),
@@ -17,10 +17,15 @@ bool AudioPlayer::begin() {
         return false;
     }
 
+    // Speaker is already enabled by M5.begin() in M5Unified
+    // No need to manually enable AXP192 - M5Unified handles it
+
     // Set initial volume (M5.Speaker expects 0-255)
     setVolumeInternal(map(current_volume, 0, 100, 0, 255));
 
     Serial.println("[AudioPlayer] Initialized");
+    Serial.printf("[AudioPlayer] Speaker enabled: %s\n", M5.Speaker.isEnabled() ? "yes" : "no");
+    Serial.printf("[AudioPlayer] Available channels: 8\n");
     return true;
 }
 
@@ -42,11 +47,37 @@ void AudioPlayer::play(Sound sound) {
         return;
     }
 
-    // Try to play WAV file
-    const char* path = SOUND_PATHS[static_cast<int>(sound)];
-    if (!playWavFile(path)) {
-        // Fallback to beep if WAV file not found
-        Serial.printf("[AudioPlayer] WAV file not found: %s, using beep\n", path);
+    // Map Sound enum to PROGMEM WAV data
+    const uint8_t* wav_data = nullptr;
+    size_t wav_len = 0;
+
+    switch (sound) {
+        case Sound::WORK_START:
+            wav_data = wav_work_start;
+            wav_len = wav_work_start_len;
+            break;
+        case Sound::REST_START:
+            wav_data = wav_rest_start;
+            wav_len = wav_rest_start_len;
+            break;
+        case Sound::LONG_REST_START:
+            wav_data = wav_long_rest_start;
+            wav_len = wav_long_rest_start_len;
+            break;
+        case Sound::WARNING:
+            wav_data = wav_warning;
+            wav_len = wav_warning_len;
+            break;
+        default:
+            Serial.println("[AudioPlayer] Unknown sound, using beep");
+            playBeep();
+            return;
+    }
+
+    // Try to play WAV from PROGMEM
+    if (!playWavFile(wav_data, wav_len)) {
+        // Fallback to beep if playback fails
+        Serial.println("[AudioPlayer] WAV playback failed, using beep");
         playBeep();
     }
 }
@@ -100,6 +131,12 @@ void AudioPlayer::playBeep() {
     playTone(1000, 100);  // 1kHz, 100ms beep
 }
 
+void AudioPlayer::playWarning() {
+    if (!muted) {
+        play(Sound::WARNING);
+    }
+}
+
 void AudioPlayer::update() {
     // Update playing state
     playing = isPlaying();
@@ -107,27 +144,23 @@ void AudioPlayer::update() {
 
 // Private methods
 
-bool AudioPlayer::playWavFile(const char* path) {
-    // Check if file exists in SPIFFS
-    // Note: This is a placeholder - actual WAV playback requires:
-    // 1. SPIFFS initialization
-    // 2. WAV file parsing
-    // 3. I2S audio streaming
-    //
-    // For MVP, we'll use M5.Speaker.playWav() if available,
-    // otherwise fall back to tones.
+bool AudioPlayer::playWavFile(const uint8_t* wav_data, size_t len) {
+    if (wav_data == nullptr || len == 0) {
+        Serial.println("[AudioPlayer] Invalid WAV data");
+        return false;
+    }
 
-    // Attempt to play using M5Unified's built-in method
-    // (availability depends on M5Unified version)
-    #ifdef M5_SPEAKER_PLAY_WAV
-    if (M5.Speaker.playWav(path)) {
-        Serial.printf("[AudioPlayer] Playing WAV: %s\n", path);
+    // Play WAV from PROGMEM using M5Unified Speaker API
+    // M5.Speaker.playWav() accepts const uint8_t* and works with PROGMEM
+    // Auto-assign to any available channel (-1), no repeat (1), no loop (false)
+    if (M5.Speaker.playWav(wav_data, len, 1, -1, false)) {
+        Serial.printf("[AudioPlayer] Playing WAV from PROGMEM (%d bytes)\n", len);
         playing = true;
         return true;
     }
-    #endif
 
-    // WAV playback not available or file not found
+    // WAV playback failed
+    Serial.println("[AudioPlayer] M5.Speaker.playWav() failed");
     return false;
 }
 

@@ -53,10 +53,10 @@ private:
     Callback callback_;
     bool touch_started_;  // Track if touch started on this widget
 
-    // Colors
+    // Colors (RGB565 format: 5 bits red, 6 bits green, 5 bits blue)
     static constexpr uint16_t COLOR_ON = TFT_GREEN;
-    static constexpr uint16_t COLOR_OFF = 0x666666;  // Gray
-    static constexpr uint16_t COLOR_BORDER = 0x888888;
+    static constexpr uint16_t COLOR_OFF = 0x632C;  // Gray (RGB: 102, 102, 102)
+    static constexpr uint16_t COLOR_BORDER = 0x8C51;  // Light gray (RGB: 136, 136, 136)
 };
 
 #endif // TOGGLE_H

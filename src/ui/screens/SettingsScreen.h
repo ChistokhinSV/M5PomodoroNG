@@ -1,12 +1,17 @@
 #ifndef SETTINGSSCREEN_H
 #define SETTINGSSCREEN_H
 
+#include <functional>
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/Button.h"
 #include "../widgets/Slider.h"
 #include "../widgets/Toggle.h"
 #include "../../core/Config.h"
+
+// Forward declare ScreenID from ScreenManager.h (avoid circular include)
+enum class ScreenID;
+using NavigationCallback = std::function<void(ScreenID)>;
 
 /**
  * Settings screen - multi-page configuration UI
@@ -40,7 +45,7 @@
  */
 class SettingsScreen {
 public:
-    SettingsScreen(Config& config);
+    SettingsScreen(Config& config, NavigationCallback navigate_callback);
 
     // Lifecycle
     void draw(Renderer& renderer);
@@ -51,8 +56,16 @@ public:
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
     void markDirty() { needs_redraw_ = true; }
 
+    // Hardware button interface
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC,
+                        bool& enabledA, bool& enabledB, bool& enabledC);
+    void onButtonA();  // Back to Main
+    void onButtonB();  // Previous page
+    void onButtonC();  // Next page
+
 private:
     Config& config_;
+    NavigationCallback navigate_callback_;
 
     // Widgets
     StatusBar status_bar_;
@@ -79,11 +92,7 @@ private:
     Toggle toggle_wake_rotation_;
     Slider slider_min_battery_;
 
-    // Navigation buttons
-    Button btn_back_;
-    Button btn_prev_;
-    Button btn_next_;
-    Button btn_reset_;
+    // Note: Navigation buttons removed, now using hardware buttons
 
     // State
     uint8_t current_page_;
@@ -110,12 +119,6 @@ private:
     // Initialize widgets from Config
     void loadFromConfig();
 
-    // Callback handlers (must be static for C++ callback pattern)
-    static void onBackPress();
-    static void onPrevPress();
-    static void onNextPress();
-    static void onResetPress();
-
     // Value change callbacks
     void onWorkDurationChange(uint16_t value);
     void onShortBreakChange(uint16_t value);
@@ -135,9 +138,6 @@ private:
     void onSleepAfterChange(uint16_t value);
     void onWakeRotationChange(bool state);
     void onMinBatteryChange(uint16_t value);
-
-    // Static instance pointer for callbacks
-    static SettingsScreen* instance_;
 };
 
 #endif // SETTINGSSCREEN_H

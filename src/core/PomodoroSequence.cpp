@@ -82,13 +82,13 @@ void PomodoroSequence::advance() {
 uint8_t PomodoroSequence::getTotalSessions() const {
     switch (mode) {
         case Mode::CLASSIC:
-            return 8;  // 4 work + 3 short breaks + 1 long break
+            return 4;  // 4 work sessions (dots)
         case Mode::STUDY:
-            return 2;  // 1 work + 1 break (repeating)
+            return 1;  // 1 work session (dots)
         case Mode::CUSTOM:
-            return (custom_sessions_before_long * 2);  // work + breaks
+            return custom_sessions_before_long;  // N work sessions (dots)
         default:
-            return 8;
+            return 4;
     }
 }
 
@@ -164,30 +164,12 @@ PomodoroSequence::SessionType PomodoroSequence::getSessionType(uint8_t session_n
 }
 
 uint16_t PomodoroSequence::getSessionDuration(SessionType type) const {
-    switch (mode) {
-        case Mode::CLASSIC:
-            switch (type) {
-                case SessionType::WORK: return 25;
-                case SessionType::SHORT_BREAK: return 5;
-                case SessionType::LONG_BREAK: return 15;
-            }
-            break;
-
-        case Mode::STUDY:
-            switch (type) {
-                case SessionType::WORK: return 45;
-                case SessionType::SHORT_BREAK:
-                case SessionType::LONG_BREAK: return 15;
-            }
-            break;
-
-        case Mode::CUSTOM:
-            switch (type) {
-                case SessionType::WORK: return custom_work_min;
-                case SessionType::SHORT_BREAK: return custom_short_break_min;
-                case SessionType::LONG_BREAK: return custom_long_break_min;
-            }
-            break;
+    // All modes now use custom durations (set via setWorkDuration(), etc.)
+    // Defaults: CLASSIC (25/5/15), STUDY (45/15/15), or user-configured values
+    switch (type) {
+        case SessionType::WORK: return custom_work_min;
+        case SessionType::SHORT_BREAK: return custom_short_break_min;
+        case SessionType::LONG_BREAK: return custom_long_break_min;
     }
 
     return 25;  // Default fallback

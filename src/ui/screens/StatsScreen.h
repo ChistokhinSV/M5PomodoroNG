@@ -1,11 +1,16 @@
 #ifndef STATSSCREEN_H
 #define STATSSCREEN_H
 
+#include <functional>
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/StatsChart.h"
 #include "../widgets/Button.h"
 #include "../../core/Statistics.h"
+
+// Forward declare ScreenID from ScreenManager.h (avoid circular include)
+enum class ScreenID;
+using NavigationCallback = std::function<void(ScreenID)>;
 
 /**
  * Statistics screen - displays productivity data and weekly chart
@@ -36,7 +41,7 @@
  */
 class StatsScreen {
 public:
-    StatsScreen(Statistics& statistics);
+    StatsScreen(Statistics& statistics, NavigationCallback navigate_callback);
 
     // Lifecycle
     void draw(Renderer& renderer);
@@ -47,13 +52,20 @@ public:
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
     void markDirty() { needs_redraw_ = true; }
 
+    // Hardware button interface
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC);
+    void onButtonA();  // Back to Main
+    void onButtonB();  // (unused)
+    void onButtonC();  // (unused)
+
 private:
     Statistics& statistics_;
+    NavigationCallback navigate_callback_;
 
     // Widgets
     StatusBar status_bar_;
     StatsChart stats_chart_;
-    Button btn_back_;
+    // Note: Back button removed, now using hardware button
 
     // State
     bool needs_redraw_;
@@ -73,12 +85,6 @@ private:
     void drawSummary(Renderer& renderer);       // Today + Streak
     void drawChartTitle(Renderer& renderer);
     void drawLifetimeStats(Renderer& renderer); // Total + Avg
-
-    // Button callback
-    static void onBackPress();
-
-    // Static instance pointer for callbacks
-    static StatsScreen* instance_;
 };
 
 #endif // STATSSCREEN_H

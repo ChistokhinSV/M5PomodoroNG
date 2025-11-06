@@ -1,11 +1,16 @@
 #ifndef PAUSESCREEN_H
 #define PAUSESCREEN_H
 
+#include <functional>
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/Button.h"
 #include "../../core/TimerStateMachine.h"
 #include "../../hardware/LEDController.h"
+
+// Forward declare ScreenID from ScreenManager.h (avoid circular include)
+enum class ScreenID;
+using NavigationCallback = std::function<void(ScreenID)>;
 
 /**
  * Pause screen - displays paused timer state
@@ -35,7 +40,9 @@
  */
 class PauseScreen {
 public:
-    PauseScreen(TimerStateMachine& state_machine, LEDController& led_controller);
+    PauseScreen(TimerStateMachine& state_machine,
+                LEDController& led_controller,
+                NavigationCallback navigate_callback);
 
     // Lifecycle
     void draw(Renderer& renderer);
@@ -46,14 +53,20 @@ public:
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
     void markDirty() { needs_redraw_ = true; }
 
+    // Hardware button interface
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC);
+    void onButtonA();  // Resume timer
+    void onButtonB();  // (unused)
+    void onButtonC();  // Stop timer
+
 private:
     TimerStateMachine& state_machine_;
     LEDController& led_controller_;
+    NavigationCallback navigate_callback_;
 
     // Widgets
     StatusBar status_bar_;
-    Button btn_resume_;
-    Button btn_stop_;
+    // Note: Button widgets removed, now using hardware buttons
 
     // State
     bool needs_redraw_;
@@ -75,13 +88,6 @@ private:
     // Drawing helpers
     void drawPausedText(Renderer& renderer);
     void drawTimer(Renderer& renderer);
-
-    // Button callbacks
-    static void onResumePress();
-    static void onStopPress();
-
-    // Static instance pointer for callbacks
-    static PauseScreen* instance_;
 };
 
 #endif // PAUSESCREEN_H

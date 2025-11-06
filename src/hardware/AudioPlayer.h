@@ -4,36 +4,44 @@
 #include <M5Unified.h>
 #include <cstdint>
 
+// Forward declarations for embedded audio data (from audio_data.cpp)
+extern const uint8_t wav_work_start[] PROGMEM;
+extern const uint32_t wav_work_start_len;
+extern const uint8_t wav_rest_start[] PROGMEM;
+extern const uint32_t wav_rest_start_len;
+extern const uint8_t wav_long_rest_start[] PROGMEM;
+extern const uint32_t wav_long_rest_start_len;
+extern const uint8_t wav_warning[] PROGMEM;
+extern const uint32_t wav_warning_len;
+
 /**
  * Audio playback via M5Stack Core2 internal speaker (I2S)
  *
  * Features:
- * - WAV file playback from SPIFFS
+ * - WAV file playback from PROGMEM (embedded in firmware)
  * - Volume control (0-100%)
- * - Sound effects (beep, tick, alert)
+ * - Sound effects (beep tones)
  * - Non-blocking playback
  *
  * M5Stack Core2 Audio Hardware:
  * - Speaker: NS4168 I2S amplifier
- * - Connector: 8-pin FPC to speaker
- * - Sample Rate: 44.1kHz or 48kHz
- * - Bit Depth: 16-bit
+ * - Sample Rate: 16kHz
+ * - Bit Depth: 16-bit signed PCM
+ * - Power: AXP192 controlled (GPIO enable)
  *
- * Sound Files (data/audio/):
- * - work_start.wav - Work session beginning
- * - work_end.wav - Work session complete
- * - break_start.wav - Break beginning
- * - break_end.wav - Break complete
- * - tick.wav - Timer tick (optional)
+ * Embedded Sounds (PROGMEM):
+ * - WORK_START - Work session beginning (ascending tones)
+ * - REST_START - Short break beginning (descending tones)
+ * - LONG_REST_START - Long break beginning (long descending sequence)
+ * - WARNING - 30-second warning (double beep)
  */
 class AudioPlayer {
 public:
     enum class Sound {
         WORK_START,
-        WORK_END,
-        BREAK_START,
-        BREAK_END,
-        TICK,
+        REST_START,
+        LONG_REST_START,
+        WARNING,
         BEEP_SHORT,    // Generated tone (200ms)
         BEEP_LONG      // Generated tone (500ms)
     };
@@ -61,6 +69,9 @@ public:
     void playTone(uint16_t frequency_hz, uint16_t duration_ms);
     void playBeep();  // Quick 1kHz beep
 
+    // Warning sound (30s before timer expiration)
+    void playWarning();
+
     // Must call every loop iteration
     void update();
 
@@ -69,17 +80,8 @@ private:
     bool muted = false;
     bool playing = false;
 
-    // WAV file paths
-    static constexpr const char* SOUND_PATHS[] = {
-        "/audio/work_start.wav",
-        "/audio/work_end.wav",
-        "/audio/break_start.wav",
-        "/audio/break_end.wav",
-        "/audio/tick.wav"
-    };
-
     // Internal methods
-    bool playWavFile(const char* path);
+    bool playWavFile(const uint8_t* wav_data, size_t len);
     void setVolumeInternal(uint8_t volume_255);
 };
 

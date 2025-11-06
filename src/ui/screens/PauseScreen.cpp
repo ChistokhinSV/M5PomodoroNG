@@ -2,32 +2,21 @@
 #include <M5Unified.h>
 #include <stdio.h>
 
-// Static instance pointer for button callbacks
-PauseScreen* PauseScreen::instance_ = nullptr;
-
-PauseScreen::PauseScreen(TimerStateMachine& state_machine, LEDController& led_controller)
+PauseScreen::PauseScreen(TimerStateMachine& state_machine,
+                         LEDController& led_controller,
+                         NavigationCallback navigate_callback)
     : state_machine_(state_machine),
       led_controller_(led_controller),
+      navigate_callback_(navigate_callback),
       needs_redraw_(true) {
-
-    // Set static instance for callbacks
-    instance_ = this;
 
     // Configure widgets with layout positions
     // Status bar at top (320×20)
     status_bar_.setBounds(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
 
-    // Resume button (left side)
-    btn_resume_.setBounds(40, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT);
-    btn_resume_.setLabel("Resume");
-    btn_resume_.setCallback(onResumePress);
-    btn_resume_.setColors(Renderer::Color(COLOR_AMBER), Renderer::Color(COLOR_AMBER_DARK));
-
-    // Stop button (right side)
-    btn_stop_.setBounds(170, BUTTON_Y, BUTTON_WIDTH, BUTTON_HEIGHT);
-    btn_stop_.setLabel("Stop");
-    btn_stop_.setCallback(onStopPress);
-    btn_stop_.setColors(Renderer::Color(COLOR_AMBER), Renderer::Color(COLOR_AMBER_DARK));
+    // Note: Hardware buttons replaced custom touch buttons
+    // BtnA (left): Resume timer
+    // BtnC (right): Stop timer
 }
 
 void PauseScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
@@ -45,8 +34,6 @@ void PauseScreen::update(uint32_t deltaMs) {
 
     // Update widgets
     status_bar_.update(deltaMs);
-    btn_resume_.update(deltaMs);
-    btn_stop_.update(deltaMs);
 
     needs_redraw_ = true;
 }
@@ -66,26 +53,14 @@ void PauseScreen::draw(Renderer& renderer) {
     // Draw frozen timer
     drawTimer(renderer);
 
-    // Draw buttons
-    btn_resume_.draw(renderer);
-    btn_stop_.draw(renderer);
+    // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
 
     needs_redraw_ = false;
 }
 
 void PauseScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    if (pressed) {
-        // Touch down - check button hits
-        if (btn_resume_.hitTest(x, y)) {
-            btn_resume_.onTouch(x, y);
-        } else if (btn_stop_.hitTest(x, y)) {
-            btn_stop_.onTouch(x, y);
-        }
-    } else {
-        // Touch up - release buttons
-        btn_resume_.onRelease(x, y);
-        btn_stop_.onRelease(x, y);
-    }
+    // Touch handling removed - now uses hardware buttons
+    // Hardware button handling done by ScreenManager via onButtonA/C()
 }
 
 void PauseScreen::drawPausedText(Renderer& renderer) {
@@ -110,23 +85,27 @@ void PauseScreen::drawTimer(Renderer& renderer) {
                        &fonts::Font8, Renderer::Color(COLOR_AMBER));
 }
 
-// Button callback implementations
-void PauseScreen::onResumePress() {
-    if (!instance_) return;
-
-    // Resume timer → goes back to RUNNING or BREAK state
-    instance_->state_machine_.handleEvent(TimerStateMachine::Event::RESUME);
-    Serial.println("[PauseScreen] Resume timer");
-
-    instance_->needs_redraw_ = true;
+// Hardware button interface implementation
+void PauseScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) {
+    btnA = "Resume";  // Resume timer
+    btnB = "";        // Unused
+    btnC = "Stop";    // Stop timer
 }
 
-void PauseScreen::onStopPress() {
-    if (!instance_) return;
+void PauseScreen::onButtonA() {
+    // Resume timer
+    Serial.println("[PauseScreen] BtnA: Resume timer");
+    state_machine_.handleEvent(TimerStateMachine::Event::RESUME);
+    needs_redraw_ = true;
+}
 
-    // Stop timer → goes to IDLE state
-    instance_->state_machine_.handleEvent(TimerStateMachine::Event::STOP);
-    Serial.println("[PauseScreen] Stop timer");
+void PauseScreen::onButtonB() {
+    // Unused
+}
 
-    instance_->needs_redraw_ = true;
+void PauseScreen::onButtonC() {
+    // Stop timer
+    Serial.println("[PauseScreen] BtnC: Stop timer");
+    state_machine_.handleEvent(TimerStateMachine::Event::STOP);
+    needs_redraw_ = true;
 }

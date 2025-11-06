@@ -3,36 +3,19 @@
 #include <M5Unified.h>
 #include <stdio.h>
 
-// Static instance pointer for button callbacks
-SettingsScreen* SettingsScreen::instance_ = nullptr;
-
-SettingsScreen::SettingsScreen(Config& config)
+SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callback)
     : config_(config),
+      navigate_callback_(navigate_callback),
       current_page_(0),
       needs_redraw_(true) {
-
-    // Set static instance for callbacks
-    instance_ = this;
 
     // Configure status bar
     status_bar_.setBounds(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
 
-    // Configure navigation buttons
-    btn_back_.setBounds(10, SCREEN_HEIGHT - NAV_HEIGHT + 5, 70, 25);
-    btn_back_.setLabel("<- Back");
-    btn_back_.setCallback(onBackPress);
-
-    btn_prev_.setBounds(90, SCREEN_HEIGHT - NAV_HEIGHT + 5, 60, 25);
-    btn_prev_.setLabel("Prev");
-    btn_prev_.setCallback(onPrevPress);
-
-    btn_next_.setBounds(160, SCREEN_HEIGHT - NAV_HEIGHT + 5, 60, 25);
-    btn_next_.setLabel("Next");
-    btn_next_.setCallback(onNextPress);
-
-    btn_reset_.setBounds(230, SCREEN_HEIGHT - NAV_HEIGHT + 5, 80, 25);
-    btn_reset_.setLabel("Reset");
-    btn_reset_.setCallback(onResetPress);
+    // Note: Hardware buttons replaced custom touch buttons
+    // BtnA (left): Back to Main
+    // BtnB (center): Prev page (enabled if not on first page)
+    // BtnC (right): Next page (enabled if not on last page)
 
     // Calculate widget positions (CSS-style cumulative Y positioning)
     int16_t widget_start_y = STATUS_BAR_HEIGHT + TITLE_HEIGHT + 5;
@@ -222,12 +205,6 @@ void SettingsScreen::update(uint32_t deltaMs) {
         slider_min_battery_.update(deltaMs);
     }
 
-    // Update navigation buttons
-    btn_back_.update(deltaMs);
-    btn_prev_.update(deltaMs);
-    btn_next_.update(deltaMs);
-    btn_reset_.update(deltaMs);
-
     needs_redraw_ = true;
 }
 
@@ -257,50 +234,15 @@ void SettingsScreen::draw(Renderer& renderer) {
         drawPage4(renderer);
     }
 
-    // Draw navigation buttons
-    btn_back_.draw(renderer);
-
-    // Show Prev button only if not on first page
-    if (current_page_ > 0) {
-        btn_prev_.setVisible(true);
-        btn_prev_.draw(renderer);
-    } else {
-        btn_prev_.setVisible(false);
-    }
-
-    // Show Next button only if not on last page
-    if (current_page_ < TOTAL_PAGES - 1) {
-        btn_next_.setVisible(true);
-        btn_next_.draw(renderer);
-    } else {
-        btn_next_.setVisible(false);
-    }
-
-    // Show Reset button only on last page
-    if (current_page_ == TOTAL_PAGES - 1) {
-        btn_reset_.setVisible(true);
-        btn_reset_.draw(renderer);
-    } else {
-        btn_reset_.setVisible(false);
-    }
+    // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
 
     needs_redraw_ = false;
 }
 
 void SettingsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
     if (pressed) {
-        // Touch down - check button hits
-        if (btn_back_.hitTest(x, y)) {
-            btn_back_.onTouch(x, y);
-        } else if (btn_prev_.isVisible() && btn_prev_.hitTest(x, y)) {
-            btn_prev_.onTouch(x, y);
-        } else if (btn_next_.isVisible() && btn_next_.hitTest(x, y)) {
-            btn_next_.onTouch(x, y);
-        } else if (btn_reset_.isVisible() && btn_reset_.hitTest(x, y)) {
-            btn_reset_.onTouch(x, y);
-        }
-        // Check widgets on current page
-        else if (current_page_ == 0) {
+        // Touch down - check widgets on current page
+        if (current_page_ == 0) {
             if (slider_work_duration_.hitTest(x, y)) slider_work_duration_.onTouch(x, y);
             else if (slider_short_break_.hitTest(x, y)) slider_short_break_.onTouch(x, y);
             else if (slider_long_break_.hitTest(x, y)) slider_long_break_.onTouch(x, y);
@@ -323,12 +265,7 @@ void SettingsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
             else if (slider_min_battery_.hitTest(x, y)) slider_min_battery_.onTouch(x, y);
         }
     } else {
-        // Touch up - release all buttons and widgets
-        btn_back_.onRelease(x, y);
-        btn_prev_.onRelease(x, y);
-        btn_next_.onRelease(x, y);
-        btn_reset_.onRelease(x, y);
-
+        // Touch up - release widgets
         if (current_page_ == 0) {
             slider_work_duration_.onRelease(x, y);
             slider_short_break_.onRelease(x, y);
@@ -381,7 +318,7 @@ void SettingsScreen::drawPageIndicator(Renderer& renderer) {
 
     for (uint8_t i = 0; i < TOTAL_PAGES; i++) {
         bool is_current = (i == current_page_);
-        Renderer::Color color = is_current ? Renderer::Color(TFT_CYAN) : Renderer::Color(0x666666);
+        Renderer::Color color = is_current ? Renderer::Color(TFT_CYAN) : Renderer::Color(0x632C);  // Gray in RGB565
 
         renderer.drawCircle(dot_x + i * dot_spacing, dot_y, 4, color, true);
     }
@@ -421,54 +358,6 @@ void SettingsScreen::drawPage4(Renderer& renderer) {
     slider_sleep_after_.draw(renderer);
     toggle_wake_rotation_.draw(renderer);
     slider_min_battery_.draw(renderer);
-}
-
-// Navigation button callbacks
-void SettingsScreen::onBackPress() {
-    if (!instance_) return;
-
-    // Save config before exiting
-    instance_->config_.save();
-    Serial.println("[SettingsScreen] Back button pressed, config saved");
-
-    // Navigate back to main screen
-    if (g_navigate_callback) {
-        g_navigate_callback(ScreenID::MAIN);
-    }
-}
-
-void SettingsScreen::onPrevPress() {
-    if (!instance_) return;
-
-    if (instance_->current_page_ > 0) {
-        instance_->current_page_--;
-        Serial.printf("[SettingsScreen] Previous page: %d\n", instance_->current_page_);
-        instance_->needs_redraw_ = true;
-    }
-}
-
-void SettingsScreen::onNextPress() {
-    if (!instance_) return;
-
-    if (instance_->current_page_ < TOTAL_PAGES - 1) {
-        instance_->current_page_++;
-        Serial.printf("[SettingsScreen] Next page: %d\n", instance_->current_page_);
-        instance_->needs_redraw_ = true;
-    }
-}
-
-void SettingsScreen::onResetPress() {
-    if (!instance_) return;
-
-    // Reset config to defaults
-    instance_->config_.reset();
-    instance_->config_.save();
-
-    // Reload widgets with new values
-    instance_->loadFromConfig();
-
-    Serial.println("[SettingsScreen] Reset to defaults");
-    instance_->needs_redraw_ = true;
 }
 
 // Value change callbacks - Pomodoro settings
@@ -568,4 +457,44 @@ void SettingsScreen::onMinBatteryChange(uint16_t value) {
     auto power = config_.getPower();
     power.min_battery_percent = value;
     config_.setPower(power);
+}
+
+// Hardware button interface implementation
+void SettingsScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC,
+                                    bool& enabledA, bool& enabledB, bool& enabledC) {
+    btnA = "<- Back";
+    btnB = "Prev";
+    btnC = "Next";
+
+    enabledA = true;  // Back always enabled
+    enabledB = (current_page_ > 0);  // Prev enabled if not on first page
+    enabledC = (current_page_ < TOTAL_PAGES - 1);  // Next enabled if not on last page
+}
+
+void SettingsScreen::onButtonA() {
+    // Save config before exiting
+    config_.save();
+    Serial.println("[SettingsScreen] BtnA: Config saved, navigating to Main");
+
+    if (navigate_callback_) {
+        navigate_callback_(ScreenID::MAIN);
+    }
+}
+
+void SettingsScreen::onButtonB() {
+    // Previous page
+    if (current_page_ > 0) {
+        Serial.printf("[SettingsScreen] BtnB: Page %d -> %d\n", current_page_, current_page_ - 1);
+        current_page_--;
+        needs_redraw_ = true;
+    }
+}
+
+void SettingsScreen::onButtonC() {
+    // Next page
+    if (current_page_ < TOTAL_PAGES - 1) {
+        Serial.printf("[SettingsScreen] BtnC: Page %d -> %d\n", current_page_, current_page_ + 1);
+        current_page_++;
+        needs_redraw_ = true;
+    }
 }

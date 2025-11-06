@@ -4,17 +4,16 @@
 #include <stdio.h>
 #include <string.h>
 
-// Static instance pointer for button callbacks
-MainScreen* MainScreen::instance_ = nullptr;
-
-MainScreen::MainScreen(TimerStateMachine& state_machine, PomodoroSequence& sequence)
+MainScreen::MainScreen(TimerStateMachine& state_machine,
+                       PomodoroSequence& sequence,
+                       NavigationCallback navigate_callback)
     : state_machine_(state_machine),
       sequence_(sequence),
+      navigate_callback_(navigate_callback),
       last_update_ms_(0),
       needs_redraw_(true) {
 
-    // Set static instance for callbacks
-    instance_ = this;
+    TIMER_HEIGHT = uint16_t(TIMER_FONT.height);
 
     strcpy(task_name_, "Focus Session");
 
@@ -22,38 +21,20 @@ MainScreen::MainScreen(TimerStateMachine& state_machine, PomodoroSequence& seque
     // Status bar at top (320×20)
     status_bar_.setBounds(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
 
-    // Sequence indicator below status bar (200×20, centered)
-    sequence_indicator_.setBounds(60, STATUS_BAR_HEIGHT + 10, 200, SEQUENCE_HEIGHT);
+    // Sequence indicator below status bar (200×20, centered, below mode label)
+    sequence_indicator_.setBounds(60, STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + 5, 200, SEQUENCE_HEIGHT);
     sequence_indicator_.setDotsPerGroup(4);  // Classic mode default
 
     // Progress bar in middle (280×20, centered)
-    int16_t progress_y = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + TIMER_HEIGHT;
+    int16_t progress_y = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + TIMER_HEIGHT + TIMER_GAP * 2;
     progress_bar_.setBounds(20, progress_y, 280, PROGRESS_HEIGHT);
     progress_bar_.setShowPercentage(false);  // Don't show percentage on timer progress
     progress_bar_.setColor(Renderer::Color(TFT_RED));
 
-    // Buttons at bottom (5 buttons, compact layout)
-    int16_t button_y = SCREEN_HEIGHT - BUTTON_HEIGHT - 10;
-    btn_start_.setBounds(10, button_y, 60, BUTTON_HEIGHT);
-    btn_start_.setLabel("Start");
-    btn_start_.setCallback(onStartPress);
-
-    btn_pause_.setBounds(75, button_y, 60, BUTTON_HEIGHT);
-    btn_pause_.setLabel("Pause");
-    btn_pause_.setCallback(onPausePress);
-    btn_pause_.setVisible(false);  // Hidden until timer starts
-
-    btn_stop_.setBounds(140, button_y, 50, BUTTON_HEIGHT);
-    btn_stop_.setLabel("Stop");
-    btn_stop_.setCallback(onStopPress);
-
-    btn_stats_.setBounds(195, button_y, 55, BUTTON_HEIGHT);
-    btn_stats_.setLabel("Stats");
-    btn_stats_.setCallback(onStatsPress);
-
-    btn_settings_.setBounds(255, button_y, 55, BUTTON_HEIGHT);
-    btn_settings_.setLabel("Set");
-    btn_settings_.setCallback(onSettingsPress);
+    // Note: Hardware buttons replaced custom touch buttons
+    // BtnA (left): Start/Pause (state-dependent)
+    // BtnB (center): Stats
+    // BtnC (right): Settings
 }
 
 void MainScreen::setTaskName(const char* task) {
@@ -76,14 +57,29 @@ void MainScreen::update(uint32_t deltaMs) {
     // Update state machine
     state_machine_.update(deltaMs);
 
-    // Update progress bar (inverse: 100% at start, 0% at end)
-    uint8_t progress = 100 - state_machine_.getProgressPercent();
+    // Update progress bar (0% at start, 100% at end)
+    uint8_t progress = state_machine_.getProgressPercent();
     progress_bar_.setProgress(progress);
 
     // Update sequence indicator
     auto session = sequence_.getCurrentSession();
-    sequence_indicator_.setSession(session.number - 1,  // Convert 1-based to 0-based
-                                   sequence_.getCompletedToday());
+
+    // Each session (group) contains 4 work intervals
+    // Example: 3 sessions = 12 dots total, displayed as: ●●●● ●●●● ●●●●
+    // Large spacing between groups = long break
+    // Small spacing within groups = short breaks
+    sequence_indicator_.setTotalSessions(sequence_.getTotalSessions() * 4);
+    sequence_indicator_.setDotsPerGroup(4);  // 4 work intervals per session
+
+    // Determine current work session index (0-based)
+    // During work: working on next work session after completed ones
+    // During break: doesn't matter, we pulse the last completed work session
+    uint8_t current_work_session = sequence_.getCompletedToday();
+    bool in_break = !sequence_.isWorkSession();
+
+    sequence_indicator_.setSession(current_work_session,
+                                   sequence_.getCompletedToday(),
+                                   in_break);
 
     // Update button visibility based on state
     updateButtons();
@@ -113,44 +109,24 @@ void MainScreen::draw(Renderer& renderer) {
     // Draw large timer display
     drawTimer(renderer);
 
-    // Draw progress bar
-    progress_bar_.draw(renderer);
+    // Draw progress bar only when timer is active
+    auto state = state_machine_.getState();
+    if (state == TimerStateMachine::State::ACTIVE ||
+        state == TimerStateMachine::State::PAUSED) {
+        progress_bar_.draw(renderer);
+    }
 
     // Draw task name
     drawTaskName(renderer);
 
-    // Draw buttons
-    btn_start_.draw(renderer);
-    btn_pause_.draw(renderer);
-    btn_stop_.draw(renderer);
-    btn_stats_.draw(renderer);
-    btn_settings_.draw(renderer);
+    // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
 
     needs_redraw_ = false;
 }
 
 void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    if (pressed) {
-        // Touch down - check button hits
-        if (btn_start_.hitTest(x, y)) {
-            btn_start_.onTouch(x, y);
-        } else if (btn_pause_.hitTest(x, y)) {
-            btn_pause_.onTouch(x, y);
-        } else if (btn_stop_.hitTest(x, y)) {
-            btn_stop_.onTouch(x, y);
-        } else if (btn_stats_.hitTest(x, y)) {
-            btn_stats_.onTouch(x, y);
-        } else if (btn_settings_.hitTest(x, y)) {
-            btn_settings_.onTouch(x, y);
-        }
-    } else {
-        // Touch up - release all buttons
-        btn_start_.onRelease(x, y);
-        btn_pause_.onRelease(x, y);
-        btn_stop_.onRelease(x, y);
-        btn_stats_.onRelease(x, y);
-        btn_settings_.onRelease(x, y);
-    }
+    // Touch handling removed - now uses hardware buttons
+    // Hardware button handling done by ScreenManager via onButtonA/B/C()
 }
 
 void MainScreen::drawModeLabel(Renderer& renderer) {
@@ -158,6 +134,16 @@ void MainScreen::drawModeLabel(Renderer& renderer) {
     char label[32];
     auto session = sequence_.getCurrentSession();
     uint8_t total_sessions = sequence_.getTotalSessions();
+
+    // Calculate current work session number (not total session including breaks)
+    uint8_t current_work_session;
+    if (sequence_.isWorkSession()) {
+        // Working on next work session
+        current_work_session = sequence_.getCompletedToday() + 1;
+    } else {
+        // Resting after completing a work session
+        current_work_session = sequence_.getCompletedToday();
+    }
 
     const char* mode_name = "Classic";
     switch (sequence_.getMode()) {
@@ -173,7 +159,7 @@ void MainScreen::drawModeLabel(Renderer& renderer) {
     }
 
     snprintf(label, sizeof(label), "Session %d/%d [%s]",
-             session.number, total_sessions, mode_name);
+             current_work_session, total_sessions, mode_name);
 
     int16_t y = STATUS_BAR_HEIGHT + 5;
     renderer.setTextDatum(TC_DATUM);  // Top-center
@@ -189,24 +175,33 @@ void MainScreen::drawModeLabel(Renderer& renderer) {
 }
 
 void MainScreen::drawTimer(Renderer& renderer) {
-    // Get remaining time
+    // Get time to display
     uint8_t minutes, seconds;
-    state_machine_.getRemainingTime(minutes, seconds);
+    auto state = state_machine_.getState();
+
+    if (state == TimerStateMachine::State::IDLE) {
+        // When idle, show the upcoming session duration instead of 00:00
+        auto session = sequence_.getCurrentSession();
+        minutes = session.duration_min;
+        seconds = 0;
+    } else {
+        // When active or paused, show remaining time
+        state_machine_.getRemainingTime(minutes, seconds);
+    }
 
     // Format as MM:SS
     char time_str[6];
     snprintf(time_str, sizeof(time_str), "%02d:%02d", minutes, seconds);
 
-    // Calculate position (centered, below sequence indicator)
-    int16_t y = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + 40;
+    // Calculate position
+    int16_t y = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + TIMER_GAP + TIMER_FONT.height/2;
 
     // Draw time in large font
     renderer.setTextDatum(MC_DATUM);  // Middle-center
     Renderer::Color time_color = Renderer::Color(TFT_WHITE);
 
     // Color based on state
-    auto state = state_machine_.getState();
-    if (state == TimerStateMachine::State::RUNNING) {
+    if (state == TimerStateMachine::State::ACTIVE) {
         if (sequence_.isWorkSession()) {
             time_color = Renderer::Color(TFT_RED);
         } else {
@@ -217,117 +212,93 @@ void MainScreen::drawTimer(Renderer& renderer) {
     }
 
     renderer.drawString(SCREEN_WIDTH / 2, y, time_str,
-                       &fonts::Font8, time_color);
+                       &TIMER_FONT, time_color);
 }
 
 void MainScreen::drawTaskName(Renderer& renderer) {
-    // Draw task name (truncated if too long)
-    int16_t y = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT +
-                TIMER_HEIGHT + PROGRESS_HEIGHT + 15;
+    // Calculate position based on whether progress bar is visible
+    // If progress bar visible: place below it with spacing
+    // If no progress bar: center in remaining space below timer
+    auto state = state_machine_.getState();
+    bool progress_visible = (state == TimerStateMachine::State::ACTIVE ||
+                            state == TimerStateMachine::State::PAUSED);
 
-    renderer.setTextDatum(TC_DATUM);  // Top-center
+    int16_t y;
+    int16_t controls_bottom;
+    int16_t available_space;
+
+    // timer bottom
+    controls_bottom = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + TIMER_HEIGHT + TIMER_GAP;
+
+    // progress bar bottom if visible
+    if (progress_visible) {
+        controls_bottom += PROGRESS_HEIGHT + TIMER_GAP;
+    }
+
+    // Calculate available space
+    available_space = SCREEN_HEIGHT - controls_bottom - STATUS_BAR_HEIGHT;
+
+    y = controls_bottom + (available_space / 2);
+
+    renderer.setTextDatum(MC_DATUM);  // Middle-center for better vertical centering
     renderer.drawString(SCREEN_WIDTH / 2, y, task_name_,
                        &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
 }
 
 void MainScreen::updateButtons() {
+    // Button update logic removed - now using hardware buttons with dynamic labels
+    // Button labels are updated by ScreenManager via getButtonLabels()
+}
+
+// Hardware button interface implementation
+void MainScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) {
+    // BtnA label depends on timer state (Start/Pause/Resume)
+    auto state = state_machine_.getState();
+    if (state == TimerStateMachine::State::IDLE) {
+        btnA = "Start";
+    } else if (state == TimerStateMachine::State::ACTIVE) {
+        btnA = "Pause";
+    } else if (state == TimerStateMachine::State::PAUSED) {
+        btnA = "Resume";
+    } else {
+        btnA = "";  // Unknown state
+    }
+
+    // BtnB and BtnC are always Stats and Settings
+    btnB = "Stats";
+    btnC = "Set";
+}
+
+void MainScreen::onButtonA() {
+    // Start/Pause/Resume based on state
     auto state = state_machine_.getState();
 
-    switch (state) {
-        case TimerStateMachine::State::IDLE:
-            btn_start_.setVisible(true);
-            btn_start_.setLabel("Start");
-            btn_pause_.setVisible(false);
-            btn_stop_.setVisible(false);
-            break;
-
-        case TimerStateMachine::State::RUNNING:
-        case TimerStateMachine::State::BREAK:
-            btn_start_.setVisible(false);
-            btn_pause_.setVisible(true);
-            btn_pause_.setLabel("Pause");
-            btn_stop_.setVisible(true);
-            break;
-
-        case TimerStateMachine::State::PAUSED:
-            btn_start_.setVisible(false);
-            btn_pause_.setVisible(true);
-            btn_pause_.setLabel("Resume");
-            btn_stop_.setVisible(true);
-            break;
-
-        case TimerStateMachine::State::COMPLETED:
-            btn_start_.setVisible(true);
-            btn_start_.setLabel("Next");
-            btn_pause_.setVisible(false);
-            btn_stop_.setVisible(false);
-            break;
-    }
-}
-
-// Button callback implementations
-void MainScreen::onStartPress() {
-    if (!instance_) return;
-
-    auto state = instance_->state_machine_.getState();
-
     if (state == TimerStateMachine::State::IDLE) {
-        // Start new session
-        instance_->state_machine_.handleEvent(TimerStateMachine::Event::START);
-        Serial.println("[MainScreen] Start timer");
-    } else if (state == TimerStateMachine::State::COMPLETED) {
-        // Move to next session
-        instance_->sequence_.advance();
-        instance_->state_machine_.handleEvent(TimerStateMachine::Event::START);
-        Serial.println("[MainScreen] Next session");
-    }
-
-    instance_->needs_redraw_ = true;
-}
-
-void MainScreen::onPausePress() {
-    if (!instance_) return;
-
-    auto state = instance_->state_machine_.getState();
-
-    if (state == TimerStateMachine::State::RUNNING ||
-        state == TimerStateMachine::State::BREAK) {
-        // Pause timer
-        instance_->state_machine_.handleEvent(TimerStateMachine::Event::PAUSE);
-        Serial.println("[MainScreen] Pause timer");
+        Serial.println("[MainScreen] BtnA: Start timer");
+        state_machine_.handleEvent(TimerStateMachine::Event::START);
+    } else if (state == TimerStateMachine::State::ACTIVE) {
+        Serial.println("[MainScreen] BtnA: Pause timer");
+        state_machine_.handleEvent(TimerStateMachine::Event::PAUSE);
     } else if (state == TimerStateMachine::State::PAUSED) {
-        // Resume timer
-        instance_->state_machine_.handleEvent(TimerStateMachine::Event::RESUME);
-        Serial.println("[MainScreen] Resume timer");
+        Serial.println("[MainScreen] BtnA: Resume timer");
+        state_machine_.handleEvent(TimerStateMachine::Event::RESUME);
     }
 
-    instance_->needs_redraw_ = true;
+    needs_redraw_ = true;
 }
 
-void MainScreen::onStopPress() {
-    if (!instance_) return;
-
-    // Stop timer and return to IDLE
-    instance_->state_machine_.handleEvent(TimerStateMachine::Event::STOP);
-    Serial.println("[MainScreen] Stop timer");
-
-    instance_->needs_redraw_ = true;
-}
-
-void MainScreen::onStatsPress() {
-    if (!instance_) return;
-
-    // Navigate to statistics screen
-    if (g_navigate_callback) {
-        g_navigate_callback(ScreenID::STATS);
+void MainScreen::onButtonB() {
+    // Navigate to Stats screen
+    Serial.println("[MainScreen] BtnB: Navigate to Stats");
+    if (navigate_callback_) {
+        navigate_callback_(ScreenID::STATS);
     }
 }
 
-void MainScreen::onSettingsPress() {
-    if (!instance_) return;
-
-    // Navigate to settings screen
-    if (g_navigate_callback) {
-        g_navigate_callback(ScreenID::SETTINGS);
+void MainScreen::onButtonC() {
+    // Navigate to Settings screen
+    Serial.println("[MainScreen] BtnC: Navigate to Settings");
+    if (navigate_callback_) {
+        navigate_callback_(ScreenID::SETTINGS);
     }
 }

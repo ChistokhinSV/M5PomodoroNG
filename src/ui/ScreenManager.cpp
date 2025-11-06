@@ -1,37 +1,29 @@
 #include "ScreenManager.h"
 #include <M5Unified.h>
 
-// Global navigation callback (set by ScreenManager, called by screen button handlers)
-void (*g_navigate_callback)(ScreenID) = nullptr;
-
-// Static instance for global callback
-static ScreenManager* g_screen_manager_instance = nullptr;
-
 ScreenManager::ScreenManager(TimerStateMachine& state_machine,
                              PomodoroSequence& sequence,
                              Statistics& statistics,
                              Config& config,
                              LEDController& led_controller)
-    : main_screen_(state_machine, sequence),
-      stats_screen_(statistics),
-      settings_screen_(config),
-      pause_screen_(state_machine, led_controller),
+    : main_screen_(state_machine, sequence,
+                   [this](ScreenID screen) { this->navigate(screen); }),
+      stats_screen_(statistics,
+                    [this](ScreenID screen) { this->navigate(screen); }),
+      settings_screen_(config,
+                       [this](ScreenID screen) { this->navigate(screen); }),
+      pause_screen_(state_machine, led_controller,
+                    [this](ScreenID screen) { this->navigate(screen); }),
       current_screen_(ScreenID::MAIN),
       state_machine_(state_machine),
       last_state_(TimerStateMachine::State::IDLE) {
 
-    // Set global instance for navigation callback
-    g_screen_manager_instance = this;
-
-    // Set global navigation callback (called by screen button handlers)
-    g_navigate_callback = [](ScreenID screen) {
-        if (g_screen_manager_instance) {
-            g_screen_manager_instance->navigate(screen);
-        }
-    };
+    // Configure hardware button bar
+    button_bar_.setBounds(0, 218, 320, 22);
+    updateButtonLabels();  // Set initial labels for MainScreen
 
     Serial.println("[ScreenManager] Initialized with 4 screens");
-    Serial.println("[ScreenManager] Global navigation callback set");
+    Serial.println("[ScreenManager] Navigation callbacks set via lambdas");
 }
 
 void ScreenManager::navigate(ScreenID screen) {
@@ -68,6 +60,9 @@ void ScreenManager::navigate(ScreenID screen) {
             pause_screen_.markDirty();
             break;
     }
+
+    // Update button labels for new screen
+    updateButtonLabels();
 }
 
 void ScreenManager::checkAutoNavigation() {
@@ -78,6 +73,7 @@ void ScreenManager::checkAutoNavigation() {
         Serial.println("[ScreenManager] Auto-navigation: PAUSED state -> PauseScreen");
         current_screen_ = ScreenID::PAUSE;
         pause_screen_.markDirty();
+        updateButtonLabels();  // Update button labels for PauseScreen
     }
 
     // Auto-return to MainScreen when timer resumes or stops
@@ -87,6 +83,12 @@ void ScreenManager::checkAutoNavigation() {
         Serial.println("[ScreenManager] Auto-navigation: Resumed/Stopped -> MainScreen");
         current_screen_ = ScreenID::MAIN;
         main_screen_.markDirty();
+        updateButtonLabels();  // Update button labels for MainScreen
+    }
+
+    // Update button labels on any state change (for MainScreen button state-dependent labels)
+    if (last_state_ != current_state && current_screen_ == ScreenID::MAIN) {
+        updateButtonLabels();  // Refresh button labels when state changes (ACTIVE/IDLE/PAUSED)
     }
 
     last_state_ = current_state;
@@ -129,6 +131,9 @@ void ScreenManager::draw(Renderer& renderer) {
             pause_screen_.draw(renderer);
             break;
     }
+
+    // Draw hardware button bar on top of screen content
+    button_bar_.draw(renderer);
 }
 
 void ScreenManager::handleTouch(int16_t x, int16_t y, bool pressed) {
@@ -157,4 +162,94 @@ void ScreenManager::updateStatus(uint8_t battery, bool charging, bool wifi,
     stats_screen_.updateStatus(battery, charging, wifi, mode, hour, minute);
     settings_screen_.updateStatus(battery, charging, wifi, mode, hour, minute);
     pause_screen_.updateStatus(battery, charging, wifi, mode, hour, minute);
+}
+
+void ScreenManager::handleHardwareButtons() {
+    // Handle hardware button presses (BtnA, BtnB, BtnC)
+    // Note: M5.update() must be called before this method
+
+    if (M5.BtnA.wasPressed()) {
+        Serial.println("[ScreenManager] BtnA pressed");
+        switch (current_screen_) {
+            case ScreenID::MAIN:
+                main_screen_.onButtonA();
+                break;
+            case ScreenID::STATS:
+                stats_screen_.onButtonA();
+                break;
+            case ScreenID::SETTINGS:
+                settings_screen_.onButtonA();
+                break;
+            case ScreenID::PAUSE:
+                pause_screen_.onButtonA();
+                break;
+        }
+        updateButtonLabels();  // Refresh button labels after action
+    }
+
+    if (M5.BtnB.wasPressed()) {
+        Serial.println("[ScreenManager] BtnB pressed");
+        switch (current_screen_) {
+            case ScreenID::MAIN:
+                main_screen_.onButtonB();
+                break;
+            case ScreenID::STATS:
+                stats_screen_.onButtonB();
+                break;
+            case ScreenID::SETTINGS:
+                settings_screen_.onButtonB();
+                break;
+            case ScreenID::PAUSE:
+                pause_screen_.onButtonB();
+                break;
+        }
+        updateButtonLabels();  // Refresh button labels after action
+    }
+
+    if (M5.BtnC.wasPressed()) {
+        Serial.println("[ScreenManager] BtnC pressed");
+        switch (current_screen_) {
+            case ScreenID::MAIN:
+                main_screen_.onButtonC();
+                break;
+            case ScreenID::STATS:
+                stats_screen_.onButtonC();
+                break;
+            case ScreenID::SETTINGS:
+                settings_screen_.onButtonC();
+                break;
+            case ScreenID::PAUSE:
+                pause_screen_.onButtonC();
+                break;
+        }
+        updateButtonLabels();  // Refresh button labels after action
+    }
+}
+
+void ScreenManager::updateButtonLabels() {
+    // Update button labels based on active screen
+    const char* labelA = "";
+    const char* labelB = "";
+    const char* labelC = "";
+    bool enabledA = true;
+    bool enabledB = true;
+    bool enabledC = true;
+
+    switch (current_screen_) {
+        case ScreenID::MAIN:
+            main_screen_.getButtonLabels(labelA, labelB, labelC);
+            break;
+        case ScreenID::STATS:
+            stats_screen_.getButtonLabels(labelA, labelB, labelC);
+            break;
+        case ScreenID::SETTINGS:
+            settings_screen_.getButtonLabels(labelA, labelB, labelC, enabledA, enabledB, enabledC);
+            break;
+        case ScreenID::PAUSE:
+            pause_screen_.getButtonLabels(labelA, labelB, labelC);
+            break;
+    }
+
+    button_bar_.setLabels(labelA, labelB, labelC);
+    button_bar_.setEnabled(enabledA, enabledB, enabledC);
 }

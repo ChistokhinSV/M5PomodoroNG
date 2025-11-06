@@ -3,24 +3,16 @@
 #include <M5Unified.h>
 #include <stdio.h>
 
-// Static instance pointer for button callbacks
-StatsScreen* StatsScreen::instance_ = nullptr;
-
-StatsScreen::StatsScreen(Statistics& statistics)
+StatsScreen::StatsScreen(Statistics& statistics, NavigationCallback navigate_callback)
     : statistics_(statistics),
+      navigate_callback_(navigate_callback),
       needs_redraw_(true) {
-
-    // Set static instance for callbacks
-    instance_ = this;
 
     // Configure widgets with layout positions
     // Status bar at top (320×20)
     status_bar_.setBounds(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
 
-    // Back button (top-left, below status bar)
-    btn_back_.setBounds(10, STATUS_BAR_HEIGHT + 5, 70, 20);
-    btn_back_.setLabel("<- Back");
-    btn_back_.setCallback(onBackPress);
+    // Note: Back button removed, now using hardware button (BtnA)
 
     // Stats chart in middle
     int16_t chart_y = STATUS_BAR_HEIGHT + TITLE_HEIGHT + SUMMARY_HEIGHT + CHART_TITLE_HEIGHT;
@@ -71,9 +63,8 @@ void StatsScreen::draw(Renderer& renderer) {
     // Draw status bar at top
     status_bar_.draw(renderer);
 
-    // Draw title and back button
+    // Draw title (back button now in hardware button bar)
     drawTitle(renderer);
-    btn_back_.draw(renderer);
 
     // Draw summary (Today + Streak)
     drawSummary(renderer);
@@ -91,15 +82,8 @@ void StatsScreen::draw(Renderer& renderer) {
 }
 
 void StatsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    if (pressed) {
-        // Touch down - check button hit
-        if (btn_back_.hitTest(x, y)) {
-            btn_back_.onTouch(x, y);
-        }
-    } else {
-        // Touch up - release button
-        btn_back_.onRelease(x, y);
-    }
+    // Touch handling removed - now uses hardware buttons
+    // Hardware button handling done by ScreenManager via onButtonA/B/C()
 }
 
 void StatsScreen::drawTitle(Renderer& renderer) {
@@ -183,12 +167,25 @@ void StatsScreen::drawLifetimeStats(Renderer& renderer) {
                        &fonts::Font2, Renderer::Color(TFT_CYAN));
 }
 
-// Button callback implementation
-void StatsScreen::onBackPress() {
-    if (!instance_) return;
+// Hardware button interface implementation
+void StatsScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) {
+    btnA = "<- Back";  // Navigate to MainScreen
+    btnB = "";         // Unused
+    btnC = "";         // Unused
+}
 
-    // Navigate back to main screen
-    if (g_navigate_callback) {
-        g_navigate_callback(ScreenID::MAIN);
+void StatsScreen::onButtonA() {
+    // Navigate back to MainScreen
+    Serial.println("[StatsScreen] BtnA: Navigate to Main");
+    if (navigate_callback_) {
+        navigate_callback_(ScreenID::MAIN);
     }
+}
+
+void StatsScreen::onButtonB() {
+    // Unused
+}
+
+void StatsScreen::onButtonC() {
+    // Unused
 }

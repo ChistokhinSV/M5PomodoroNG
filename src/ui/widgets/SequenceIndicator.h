@@ -22,8 +22,9 @@ public:
     SequenceIndicator();
 
     // Configuration
-    void setSession(uint8_t current, uint8_t completed);  // 0-15
+    void setSession(uint8_t current, uint8_t completed, bool in_break = false);  // 0-based work session indices
     void setDotsPerGroup(uint8_t count);  // Classic=4, Study=1
+    void setTotalSessions(uint8_t total);  // Total number of work sessions to display
 
     // Widget interface
     void draw(Renderer& renderer) override;
@@ -33,13 +34,15 @@ private:
     uint8_t current_session_;
     uint8_t completed_sessions_;
     uint8_t dots_per_group_;
+    uint8_t total_sessions_;  // Total number of dots to display
+    bool in_break_;  // True if currently in break (resting after work session)
 
     // Animation for current dot
     uint16_t pulse_phase_;  // 0-360 degrees
     static constexpr uint16_t PULSE_SPEED = 180;  // degrees per second
 
     void drawDot(Renderer& renderer, int16_t x, int16_t y, uint8_t state);
-    // Dot states: 0=future, 1=completed, 2=current
+    // Dot states: 0=future, 1=completed, 2=current_work, 3=current_break
 };
 
 #endif // SEQUENCEINDICATOR_H

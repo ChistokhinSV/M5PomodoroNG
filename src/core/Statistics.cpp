@@ -87,10 +87,16 @@ Statistics::DayStats Statistics::getDate(uint32_t epoch_days) const {
 
     DayStats stats;
 
+    // Check if key exists first (avoid NVS "NOT_FOUND" errors)
+    if (!const_cast<Preferences&>(prefs).isKey(key)) {
+        // No data for this day
+        return DayStats();
+    }
+
     // Read from NVS (need mutable access to prefs)
     size_t len = sizeof(DayStats);
     if (!const_cast<Preferences&>(prefs).getBytes(key, &stats, len)) {
-        // No data for this day
+        // Failed to read data
         return DayStats();
     }
 
@@ -134,6 +140,11 @@ uint16_t Statistics::getTotalCompleted() const {
     for (uint8_t i = 0; i < MAX_DAYS; i++) {
         char key[16];
         snprintf(key, sizeof(key), "day_%u", i);
+
+        // Check if key exists first (avoid NVS "NOT_FOUND" errors)
+        if (!const_cast<Preferences&>(prefs).isKey(key)) {
+            continue;
+        }
 
         DayStats stats;
         size_t len = sizeof(DayStats);

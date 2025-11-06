@@ -22,17 +22,12 @@ bool TimerStateMachine::handleEvent(Event event) {
             if (state == State::IDLE) {
                 auto session = sequence.getCurrentSession();
                 startTimer(session.duration_min);
-
-                if (session.type == PomodoroSequence::SessionType::WORK) {
-                    return transition(State::RUNNING);
-                } else {
-                    return transition(State::BREAK);
-                }
+                return transition(State::ACTIVE);
             }
             break;
 
         case Event::PAUSE:
-            if (state == State::RUNNING || state == State::BREAK) {
+            if (state == State::ACTIVE) {
                 pauseTimer();
                 return transition(State::PAUSED);
             }
@@ -41,14 +36,7 @@ bool TimerStateMachine::handleEvent(Event event) {
         case Event::RESUME:
             if (state == State::PAUSED) {
                 resumeTimer();
-
-                // Resume to previous state (RUNNING or BREAK)
-                auto session = sequence.getCurrentSession();
-                if (session.type == PomodoroSequence::SessionType::WORK) {
-                    return transition(State::RUNNING);
-                } else {
-                    return transition(State::BREAK);
-                }
+                return transition(State::ACTIVE);
             }
             break;
 
@@ -57,12 +45,26 @@ bool TimerStateMachine::handleEvent(Event event) {
             return transition(State::IDLE);
 
         case Event::TIMEOUT:
-            if (state == State::RUNNING || state == State::BREAK) {
-                // Timer reached zero
-                if (timeout_callback) {
+            if (state == State::ACTIVE) {
+                // Increment completed count for work sessions
+                if (sequence.isWorkSession()) {
+                    sequence.incrementCompletedToday();
+                }
+
+                // Auto-advance to next session
+                sequence.advance();
+
+                // Return to IDLE
+                stopTimer();
+                bool transitioned = transition(State::IDLE);
+
+                // Trigger timeout callback AFTER transitioning to IDLE
+                // This allows the callback to check the new session and auto-start if configured
+                if (transitioned && timeout_callback) {
                     timeout_callback();
                 }
-                return transition(State::COMPLETED);
+
+                return transitioned;
             }
             break;
 
@@ -77,12 +79,20 @@ bool TimerStateMachine::handleEvent(Event event) {
 }
 
 void TimerStateMachine::update(uint32_t delta_ms) {
-    if (state != State::RUNNING && state != State::BREAK) {
+    if (state != State::ACTIVE) {
         return;  // Timer not active
     }
 
     if (remaining_ms == 0) {
         return;  // Already at zero
+    }
+
+    // Check for 30-second warning (only once per session)
+    if (!warning_played && remaining_ms <= 30000 && remaining_ms > 29000) {
+        if (audio_callback) {
+            audio_callback("warning");
+        }
+        warning_played = true;
     }
 
     if (delta_ms >= remaining_ms) {
@@ -109,10 +119,8 @@ void TimerStateMachine::getRemainingTime(uint8_t& minutes, uint8_t& seconds) con
 const char* TimerStateMachine::getStateName() const {
     switch (state) {
         case State::IDLE: return "IDLE";
-        case State::RUNNING: return "RUNNING";
+        case State::ACTIVE: return "ACTIVE";
         case State::PAUSED: return "PAUSED";
-        case State::BREAK: return "BREAK";
-        case State::COMPLETED: return "COMPLETED";
         default: return "UNKNOWN";
     }
 }
@@ -131,12 +139,17 @@ bool TimerStateMachine::transition(State new_state) {
 
     State old_state = state;
 
+    // Store old state name BEFORE transition
+    const char* old_name = (old_state == State::IDLE) ? "IDLE" :
+                           (old_state == State::ACTIVE) ? "ACTIVE" :
+                           (old_state == State::PAUSED) ? "PAUSED" : "UNKNOWN";
+
     exitState(old_state);
     state = new_state;
     enterState(new_state);
 
     Serial.printf("[StateMachine] Transition: %s -> %s\n",
-                  getStateName(), getStateName());
+                  old_name, getStateName());
 
     if (state_callback) {
         state_callback(old_state, new_state);
@@ -150,7 +163,7 @@ bool TimerStateMachine::canTransition(Event event) const {
         case State::IDLE:
             return event == Event::START;
 
-        case State::RUNNING:
+        case State::ACTIVE:
             return event == Event::PAUSE ||
                    event == Event::STOP ||
                    event == Event::TIMEOUT ||
@@ -160,16 +173,6 @@ bool TimerStateMachine::canTransition(Event event) const {
             return event == Event::RESUME ||
                    event == Event::STOP ||
                    event == Event::SKIP;
-
-        case State::BREAK:
-            return event == Event::PAUSE ||
-                   event == Event::STOP ||
-                   event == Event::TIMEOUT ||
-                   event == Event::SKIP;
-
-        case State::COMPLETED:
-            return event == Event::START ||
-                   event == Event::STOP;
 
         default:
             return false;
@@ -183,42 +186,35 @@ void TimerStateMachine::enterState(State new_state) {
             total_ms = 0;
             break;
 
-        case State::RUNNING:
-        case State::BREAK:
+        case State::ACTIVE:
             // Timer already set by startTimer()
+
+            // Reset warning flag for new session
+            warning_played = false;
+
+            // Trigger audio based on session type
+            if (audio_callback) {
+                auto session_type = sequence.getCurrentSession().type;
+                if (session_type == PomodoroSequence::SessionType::WORK) {
+                    audio_callback("work_start");
+                } else if (session_type == PomodoroSequence::SessionType::SHORT_BREAK) {
+                    audio_callback("rest_start");
+                } else if (session_type == PomodoroSequence::SessionType::LONG_BREAK) {
+                    audio_callback("long_rest_start");
+                }
+            }
             break;
 
         case State::PAUSED:
             // Keep remaining_ms intact
-            break;
-
-        case State::COMPLETED:
-            remaining_ms = 0;
-            // Increment completed count for work sessions
-            if (sequence.isWorkSession()) {
-                sequence.incrementCompletedToday();
-            }
-            // Auto-advance to next session
-            sequence.advance();
             break;
     }
 }
 
 void TimerStateMachine::exitState(State old_state) {
     // Cleanup actions when leaving a state
-    switch (old_state) {
-        case State::RUNNING:
-        case State::BREAK:
-            // Nothing specific to clean up
-            break;
-
-        case State::PAUSED:
-            // Nothing specific to clean up
-            break;
-
-        default:
-            break;
-    }
+    // Currently no state-specific cleanup needed
+    (void)old_state;  // Unused parameter
 }
 
 void TimerStateMachine::startTimer(uint16_t duration_min) {
