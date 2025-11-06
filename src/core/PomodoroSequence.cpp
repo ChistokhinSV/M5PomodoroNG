@@ -80,16 +80,9 @@ void PomodoroSequence::advance() {
 }
 
 uint8_t PomodoroSequence::getTotalSessions() const {
-    switch (mode) {
-        case Mode::CLASSIC:
-            return 4;  // 4 work sessions (dots)
-        case Mode::STUDY:
-            return 1;  // 1 work session (dots)
-        case Mode::CUSTOM:
-            return custom_sessions_before_long;  // N work sessions (dots)
-        default:
-            return 4;
-    }
+    // MP-50: Return saved value for all modes (Classic/Study/Custom)
+    // Mode presets ensure correct value: Classic=4, Study=2, Custom=user-defined
+    return custom_sessions_before_long;
 }
 
 bool PomodoroSequence::isWorkSession() const {
