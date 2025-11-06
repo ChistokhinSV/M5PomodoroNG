@@ -526,56 +526,72 @@ void SettingsScreen::onMinBatteryChange(uint16_t value) {
 
 // MP-50: Mode preset callbacks
 void SettingsScreen::onModeClassic() {
-    Serial.println("[SettingsScreen] Mode: Classic (25/5/15)");
+    Serial.println("[SettingsScreen] Mode: Classic (25/5/15, 4 sessions)");
     auto pomodoro = config_.getPomodoro();
 
     // Save current values to custom template if they don't match Classic or Study
-    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
-    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    bool is_classic = (pomodoro.work_duration_min == 25 &&
+                       pomodoro.short_break_min == 5 &&
+                       pomodoro.long_break_min == 15 &&
+                       pomodoro.sessions_before_long == 4);
+    bool is_study = (pomodoro.work_duration_min == 45 &&
+                     pomodoro.short_break_min == 15 &&
+                     pomodoro.long_break_min == 30 &&
+                     pomodoro.sessions_before_long == 2);
     if (!is_classic && !is_study) {
         pomodoro.custom_work_min = pomodoro.work_duration_min;
         pomodoro.custom_short_break_min = pomodoro.short_break_min;
         pomodoro.custom_long_break_min = pomodoro.long_break_min;
     }
 
-    // Apply Classic preset
+    // Apply Classic preset (25/5/15, 4 sessions)
     pomodoro.work_duration_min = 25;
     pomodoro.short_break_min = 5;
     pomodoro.long_break_min = 15;
+    pomodoro.sessions_before_long = 4;
     config_.setPomodoro(pomodoro);
 
     // Update UI sliders
     slider_work_duration_.setValue(25);
     slider_short_break_.setValue(5);
     slider_long_break_.setValue(15);
+    slider_sessions_.setValue(4);
 
     updateCustomButtonLabel();  // Update Custom button with saved template
     updateModeHighlights();
 }
 
 void SettingsScreen::onModeStudy() {
-    Serial.println("[SettingsScreen] Mode: Study (45/15/30)");
+    Serial.println("[SettingsScreen] Mode: Study (45/15/30, 2 sessions)");
     auto pomodoro = config_.getPomodoro();
 
     // Save current values to custom template if they don't match Classic or Study
-    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
-    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    bool is_classic = (pomodoro.work_duration_min == 25 &&
+                       pomodoro.short_break_min == 5 &&
+                       pomodoro.long_break_min == 15 &&
+                       pomodoro.sessions_before_long == 4);
+    bool is_study = (pomodoro.work_duration_min == 45 &&
+                     pomodoro.short_break_min == 15 &&
+                     pomodoro.long_break_min == 30 &&
+                     pomodoro.sessions_before_long == 2);
     if (!is_classic && !is_study) {
         pomodoro.custom_work_min = pomodoro.work_duration_min;
         pomodoro.custom_short_break_min = pomodoro.short_break_min;
         pomodoro.custom_long_break_min = pomodoro.long_break_min;
     }
 
-    // Apply Study preset
+    // Apply Study preset (45/15/30, 2 sessions)
     pomodoro.work_duration_min = 45;
     pomodoro.short_break_min = 15;
     pomodoro.long_break_min = 30;
+    pomodoro.sessions_before_long = 2;
     config_.setPomodoro(pomodoro);
 
     // Update UI sliders
     slider_work_duration_.setValue(45);
     slider_short_break_.setValue(15);
     slider_long_break_.setValue(30);
+    slider_sessions_.setValue(2);
 
     updateCustomButtonLabel();  // Update Custom button with saved template
     updateModeHighlights();
@@ -613,8 +629,14 @@ void SettingsScreen::updateCustomButtonLabel() {
 void SettingsScreen::updateModeHighlights() {
     // Detect current mode based on slider values
     auto pomodoro = config_.getPomodoro();
-    bool is_classic = (pomodoro.work_duration_min == 25 && pomodoro.short_break_min == 5 && pomodoro.long_break_min == 15);
-    bool is_study = (pomodoro.work_duration_min == 45 && pomodoro.short_break_min == 15 && pomodoro.long_break_min == 30);
+    bool is_classic = (pomodoro.work_duration_min == 25 &&
+                       pomodoro.short_break_min == 5 &&
+                       pomodoro.long_break_min == 15 &&
+                       pomodoro.sessions_before_long == 4);
+    bool is_study = (pomodoro.work_duration_min == 45 &&
+                     pomodoro.short_break_min == 15 &&
+                     pomodoro.long_break_min == 30 &&
+                     pomodoro.sessions_before_long == 2);
 
     // Set button colors (highlighted = green, normal = blue)
     Renderer::Color green = Renderer::Color(0x2ECC71);   // Highlighted

@@ -129,16 +129,20 @@ void setup() {
         pomodoro_config.long_break_min == 15 &&
         pomodoro_config.sessions_before_long == 4) {
         mode = PomodoroSequence::Mode::CLASSIC;
-        Serial.println("[Config] Using CLASSIC mode (25/5/15)");
+        Serial.println("[Config] Using CLASSIC mode (25/5/15, 4 sessions)");
     } else if (pomodoro_config.work_duration_min == 45 &&
                pomodoro_config.short_break_min == 15 &&
                pomodoro_config.long_break_min == 30 &&
-               pomodoro_config.sessions_before_long == 4) {
+               pomodoro_config.sessions_before_long == 2) {
         mode = PomodoroSequence::Mode::STUDY;
-        Serial.println("[Config] Using STUDY mode (45/15/30)");
+        Serial.println("[Config] Using STUDY mode (45/15/30, 2 sessions)");
     } else {
         mode = PomodoroSequence::Mode::CUSTOM;
-        Serial.println("[Config] Using CUSTOM mode (user-defined)");
+        Serial.printf("[Config] Using CUSTOM mode (%d/%d/%d, %d sessions)\n",
+                     pomodoro_config.work_duration_min,
+                     pomodoro_config.short_break_min,
+                     pomodoro_config.long_break_min,
+                     pomodoro_config.sessions_before_long);
     }
 
     g_sequence->setMode(mode);
