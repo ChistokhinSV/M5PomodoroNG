@@ -1,6 +1,7 @@
 #ifndef AUDIO_PLAYER_H
 #define AUDIO_PLAYER_H
 
+#include "IAudioPlayer.h"
 #include <M5Unified.h>
 #include <cstdint>
 
@@ -16,6 +17,8 @@ extern const uint32_t wav_warning_len;
 
 /**
  * Audio playback via M5Stack Core2 internal speaker (I2S)
+ *
+ * Implements IAudioPlayer interface for hardware abstraction (MP-49)
  *
  * Features:
  * - WAV file playback from PROGMEM (embedded in firmware)
@@ -35,45 +38,36 @@ extern const uint32_t wav_warning_len;
  * - LONG_REST_START - Long break beginning (long descending sequence)
  * - WARNING - 30-second warning (double beep)
  */
-class AudioPlayer {
+class AudioPlayer : public IAudioPlayer {
 public:
-    enum class Sound {
-        WORK_START,
-        REST_START,
-        LONG_REST_START,
-        WARNING,
-        BEEP_SHORT,    // Generated tone (200ms)
-        BEEP_LONG      // Generated tone (500ms)
-    };
-
     AudioPlayer();
 
     // Initialization
-    bool begin();
+    bool begin() override;
 
     // Playback control
-    void play(Sound sound);
-    void stop();
-    bool isPlaying() const;
+    void play(Sound sound) override;
+    void stop() override;
+    bool isPlaying() const override;
 
     // Volume control (0-100%)
-    void setVolume(uint8_t percent);
-    uint8_t getVolume() const { return current_volume; }
+    void setVolume(uint8_t percent) override;
+    uint8_t getVolume() const override { return current_volume; }
 
     // Mute control
-    void mute();
-    void unmute();
-    bool isMuted() const { return muted; }
+    void mute() override;
+    void unmute() override;
+    bool isMuted() const override { return muted; }
 
     // Generated tones (for testing without WAV files)
-    void playTone(uint16_t frequency_hz, uint16_t duration_ms);
-    void playBeep();  // Quick 1kHz beep
+    void playTone(uint16_t frequency_hz, uint16_t duration_ms) override;
+    void playBeep() override;  // Quick 1kHz beep
 
     // Warning sound (30s before timer expiration)
-    void playWarning();
+    void playWarning() override;
 
     // Must call every loop iteration
-    void update();
+    void update() override;
 
 private:
     uint8_t current_volume = 70;  // 0-100%

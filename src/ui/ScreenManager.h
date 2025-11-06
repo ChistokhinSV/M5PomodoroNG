@@ -11,7 +11,7 @@
 #include "../core/PomodoroSequence.h"
 #include "../core/Statistics.h"
 #include "../core/Config.h"
-#include "../hardware/LEDController.h"
+#include "../hardware/ILEDController.h"
 #include "Renderer.h"
 
 /**
@@ -67,7 +67,7 @@ public:
                   PomodoroSequence& sequence,
                   Statistics& statistics,
                   Config& config,
-                  LEDController& led_controller);
+                  ILEDController& led_controller);
 
     // Navigation
     void navigate(ScreenID screen);

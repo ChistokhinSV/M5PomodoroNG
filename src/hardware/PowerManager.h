@@ -1,11 +1,14 @@
 #ifndef POWER_MANAGER_H
 #define POWER_MANAGER_H
 
+#include "IPowerManager.h"
 #include <M5Unified.h>
 #include <cstdint>
 
 /**
  * Power management via AXP192 PMIC (Power Management IC)
+ *
+ * Implements IPowerManager interface for hardware abstraction (MP-49)
  *
  * Features:
  * - Battery level monitoring
@@ -19,42 +22,36 @@
  * - USB-C charging (5V input)
  * - Power rail control (3.3V, 5V, display backlight)
  */
-class PowerManager {
+class PowerManager : public IPowerManager {
 public:
-    enum class SleepMode {
-        NONE,        // Active mode
-        LIGHT,       // CPU sleep, RAM retained, wake on timer/GPIO
-        DEEP         // Deep sleep, only RTC active, wake on timer/reset
-    };
-
     PowerManager();
 
     // Initialization
-    bool begin();
+    bool begin() override;
 
     // Battery status
-    uint8_t getBatteryLevel() const;           // 0-100%
-    float getBatteryVoltage() const;            // Volts (3.0 - 4.2V typical)
-    bool isCharging() const;
-    bool isChargeFull() const;
-    int16_t getBatteryCurrent() const;          // mA (negative = discharging)
+    uint8_t getBatteryLevel() const override;           // 0-100%
+    float getBatteryVoltage() const override;            // Volts (3.0 - 4.2V typical)
+    bool isCharging() const override;
+    bool isChargeFull() const override;
+    int16_t getBatteryCurrent() const override;          // mA (negative = discharging)
 
     // Display brightness (via AXP192 LDO)
-    void setBrightness(uint8_t percent);        // 0-100%
-    uint8_t getBrightness() const;
+    void setBrightness(uint8_t percent) override;        // 0-100%
+    uint8_t getBrightness() const override;
 
     // Power modes
-    void enterLightSleep(uint32_t duration_ms);
-    void enterDeepSleep(uint32_t duration_sec);
-    void wakeup();                              // Called after sleep wake
+    void enterLightSleep(uint32_t duration_ms) override;
+    void enterDeepSleep(uint32_t duration_sec) override;
+    void wakeup() override;                              // Called after sleep wake
 
     // Power consumption
-    float getPowerConsumption() const;          // Watts (estimated)
-    uint32_t getEstimatedRuntime() const;       // Minutes remaining (if discharging)
+    float getPowerConsumption() const override;          // Watts (estimated)
+    uint32_t getEstimatedRuntime() const override;       // Minutes remaining (if discharging)
 
     // Low battery protection
-    bool isLowBattery() const;                  // < 10%
-    bool isCriticalBattery() const;             // < 5%
+    bool isLowBattery() const override;                  // < 10%
+    bool isCriticalBattery() const override;             // < 5%
 
     // Diagnostics
     void printStatus() const;

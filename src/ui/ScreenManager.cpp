@@ -6,7 +6,7 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
                              PomodoroSequence& sequence,
                              Statistics& statistics,
                              Config& config,
-                             LEDController& led_controller)
+                             ILEDController& led_controller)
     : main_screen_(state_machine, sequence,
                    [this](ScreenID screen) { this->navigate(screen); }),
       stats_screen_(statistics,

@@ -1,11 +1,14 @@
 #ifndef GYRO_CONTROLLER_H
 #define GYRO_CONTROLLER_H
 
+#include "IGyroController.h"
 #include <M5Unified.h>
 #include <cstdint>
 
 /**
  * Gyroscope/Accelerometer controller for MPU6886 (M5Stack Core2)
+ *
+ * Implements IGyroController interface for hardware abstraction (MP-49)
  *
  * Features:
  * - Rotation detection (face-up, face-down, left, right)
@@ -23,68 +26,38 @@
  * - ROTATE_CW: 90° clockwise rotation
  * - ROTATE_CCW: 90° counter-clockwise rotation
  */
-class GyroController {
+class GyroController : public IGyroController {
 public:
-    enum class Orientation {
-        UNKNOWN,
-        FACE_UP,      // Screen facing up (normal use)
-        FACE_DOWN,    // Screen facing down (sleep trigger)
-        LEFT_SIDE,    // Device on left edge
-        RIGHT_SIDE,   // Device on right edge
-        TOP_SIDE,     // Device on top edge
-        BOTTOM_SIDE   // Device on bottom edge
-    };
-
-    enum class Gesture {
-        NONE,
-        FLIP,          // Face-up ↔ face-down
-        ROTATE_CW,     // 90° clockwise
-        ROTATE_CCW,    // 90° counter-clockwise
-        SHAKE          // Rapid movement (optional)
-    };
-
-    struct AccelData {
-        float x;  // g-force (-2.0 to +2.0)
-        float y;
-        float z;
-    };
-
-    struct GyroData {
-        float x;  // deg/s
-        float y;
-        float z;
-    };
-
     GyroController();
 
     // Initialization
-    bool begin();
+    bool begin() override;
 
     // Must call every loop iteration (polling-based)
-    void update();
+    void update() override;
 
     // Orientation detection
-    Orientation getOrientation() const { return current_orientation; }
-    bool isFaceUp() const { return current_orientation == Orientation::FACE_UP; }
-    bool isFaceDown() const { return current_orientation == Orientation::FACE_DOWN; }
+    Orientation getOrientation() const override { return current_orientation; }
+    bool isFaceUp() const override { return current_orientation == Orientation::FACE_UP; }
+    bool isFaceDown() const override { return current_orientation == Orientation::FACE_DOWN; }
 
     // Gesture detection
-    Gesture getLastGesture() const { return last_gesture; }
-    bool wasFlipped() const;          // Check & clear flip flag
-    bool wasRotatedCW() const;        // Check & clear rotate CW flag
-    bool wasRotatedCCW() const;       // Check & clear rotate CCW flag
+    Gesture getLastGesture() const override { return last_gesture; }
+    bool wasFlipped() override;          // Check & clear flip flag (non-const)
+    bool wasRotatedCW() override;        // Check & clear rotate CW flag (non-const)
+    bool wasRotatedCCW() override;       // Check & clear rotate CCW flag (non-const)
 
     // Raw sensor data
-    AccelData getAccel() const { return accel; }
-    GyroData getGyro() const { return gyro; }
+    AccelData getAccel() const override { return accel; }
+    GyroData getGyro() const override { return gyro; }
 
     // Calibration
-    void calibrate();                 // Zero out gyro drift
-    bool isCalibrated() const { return calibrated; }
+    void calibrate() override;                 // Zero out gyro drift
+    bool isCalibrated() const override { return calibrated; }
 
     // Sensitivity tuning
-    void setFlipThreshold(float threshold) { flip_threshold = threshold; }
-    void setRotateThreshold(float threshold) { rotate_threshold = threshold; }
+    void setFlipThreshold(float threshold) override { flip_threshold = threshold; }
+    void setRotateThreshold(float threshold) override { rotate_threshold = threshold; }
 
     // Diagnostics
     void printStatus() const;

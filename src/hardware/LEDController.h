@@ -1,11 +1,14 @@
 #ifndef LED_CONTROLLER_H
 #define LED_CONTROLLER_H
 
+#include "ILEDController.h"
 #include <M5Unified.h>
 #include <cstdint>
 
 /**
  * RGB LED controller for SK6812 LED bar (M5Stack Core2)
+ *
+ * Implements ILEDController interface for hardware abstraction (MP-49)
  *
  * Features:
  * - 10 RGB LEDs (SK6812 addressable)
@@ -23,59 +26,29 @@
  * - Status indication (work=red, break=green, paused=yellow)
  * - Notifications (pulse on session complete)
  */
-class LEDController {
+class LEDController : public ILEDController {
 public:
-    enum class Pattern {
-        OFF,            // All LEDs off
-        SOLID,          // All LEDs same color
-        PROGRESS,       // Fill LEDs proportionally (0-100%)
-        PULSE,          // Breathing effect
-        RAINBOW,        // Rainbow color cycle
-        BLINK           // Blink pattern
-    };
-
-    struct Color {
-        uint8_t r;
-        uint8_t g;
-        uint8_t b;
-
-        // Predefined colors
-        static Color Black()   { return {0, 0, 0}; }
-        static Color Red()     { return {255, 0, 0}; }
-        static Color Green()   { return {0, 255, 0}; }
-        static Color Blue()    { return {0, 0, 255}; }
-        static Color Yellow()  { return {255, 255, 0}; }
-        static Color Cyan()    { return {0, 255, 255}; }
-        static Color Magenta() { return {255, 0, 255}; }
-        static Color White()   { return {255, 255, 255}; }
-        static Color Orange()  { return {255, 165, 0}; }
-        static Color Purple()  { return {128, 0, 128}; }
-    };
-
     LEDController();
 
     // Initialization
-    bool begin();
+    bool begin() override;
 
     // Basic control
-    void setAll(Color color);
-    void setPixel(uint8_t index, Color color);
-    void clear();
-    void show();  // Update LED strip
+    void setAll(Color color) override;
+    void setPixel(uint8_t index, Color color) override;
+    void clear() override;
+    void show() override;  // Update LED strip
 
     // Brightness control (0-100%)
-    void setBrightness(uint8_t percent);
-    uint8_t getBrightness() const { return brightness; }
+    void setBrightness(uint8_t percent) override;
+    uint8_t getBrightness() const override { return brightness; }
 
     // Pattern control
-    void setPattern(Pattern pattern, Color color = Color::White());
-    void setProgress(uint8_t percent, Color color = Color::Green());
+    void setPattern(Pattern pattern, Color color = Color::White()) override;
+    void setProgress(uint8_t percent, Color color = Color::Green()) override;
 
     // Animation update (call every loop)
-    void update();
-
-    // LED count
-    static constexpr uint8_t LED_COUNT = 10;
+    void update() override;
 
 private:
     Color leds[LED_COUNT];

@@ -6,7 +6,7 @@
 #include "../widgets/StatusBar.h"
 #include "../widgets/Button.h"
 #include "../../core/TimerStateMachine.h"
-#include "../../hardware/LEDController.h"
+#include "../../hardware/ILEDController.h"
 
 // Forward declare ScreenID from ScreenManager.h (avoid circular include)
 enum class ScreenID;
@@ -41,7 +41,7 @@ using NavigationCallback = std::function<void(ScreenID)>;
 class PauseScreen {
 public:
     PauseScreen(TimerStateMachine& state_machine,
-                LEDController& led_controller,
+                ILEDController& led_controller,
                 NavigationCallback navigate_callback);
 
     // Lifecycle
@@ -61,7 +61,7 @@ public:
 
 private:
     TimerStateMachine& state_machine_;
-    LEDController& led_controller_;
+    ILEDController& led_controller_;
     NavigationCallback navigate_callback_;
 
     // Widgets

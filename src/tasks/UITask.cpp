@@ -2,7 +2,7 @@
 #include <M5Unified.h>
 #include "../ui/Renderer.h"
 #include "../ui/ScreenManager.h"
-#include "../hardware/AudioPlayer.h"
+#include "../hardware/IAudioPlayer.h"
 
 /**
  * UI Task (Core 0 - Protocol CPU)
@@ -32,7 +32,7 @@
 // External references (defined in main.cpp)
 extern Renderer* g_renderer;
 extern ScreenManager* g_screenManager;
-extern AudioPlayer* g_audioPlayer;
+extern IAudioPlayer* g_audioPlayer;
 extern TimerStateMachine* g_stateMachine;
 extern PomodoroSequence* g_sequence;
 

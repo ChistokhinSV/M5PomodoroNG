@@ -3,7 +3,7 @@
 #include <stdio.h>
 
 PauseScreen::PauseScreen(TimerStateMachine& state_machine,
-                         LEDController& led_controller,
+                         ILEDController& led_controller,
                          NavigationCallback navigate_callback)
     : state_machine_(state_machine),
       led_controller_(led_controller),
@@ -29,8 +29,8 @@ void PauseScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
 
 void PauseScreen::update(uint32_t deltaMs) {
     // Set LED to pulsing amber
-    led_controller_.setPattern(LEDController::Pattern::PULSE,
-                               LEDController::Color::Orange());  // Amber/Orange
+    led_controller_.setPattern(ILEDController::Pattern::PULSE,
+                               ILEDController::Color::Orange());  // Amber/Orange
 
     // Update widgets
     status_bar_.update(deltaMs);

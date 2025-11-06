@@ -12,7 +12,9 @@
 #include "core/PomodoroSequence.h"
 #include "core/Statistics.h"
 #include "core/SyncPrimitives.h"
+#include "hardware/ILEDController.h"
 #include "hardware/LEDController.h"
+#include "hardware/IAudioPlayer.h"
 #include "hardware/AudioPlayer.h"
 #include "tasks/UITask.h"
 #include "tasks/NetworkTask.h"
@@ -24,14 +26,14 @@
 // UI components (accessed by UITask on Core 0)
 Renderer* g_renderer = nullptr;
 ScreenManager* g_screenManager = nullptr;
-AudioPlayer* g_audioPlayer = nullptr;
+IAudioPlayer* g_audioPlayer = nullptr;
 
 // Core components (accessed by both cores)
 TimerStateMachine* g_stateMachine = nullptr;
 PomodoroSequence* g_sequence = nullptr;
 Statistics* g_statistics = nullptr;
 Config* g_config = nullptr;
-LEDController* g_ledController = nullptr;
+ILEDController* g_ledController = nullptr;
 
 // FreeRTOS task handles (for monitoring)
 TaskHandle_t g_uiTaskHandle = NULL;
@@ -142,13 +144,13 @@ void setup() {
     // Register audio callback for state machine events
     g_stateMachine->onAudioEvent([](const char* sound_name) {
         if (strcmp(sound_name, "work_start") == 0) {
-            g_audioPlayer->play(AudioPlayer::Sound::WORK_START);
+            g_audioPlayer->play(IAudioPlayer::Sound::WORK_START);
         } else if (strcmp(sound_name, "rest_start") == 0) {
-            g_audioPlayer->play(AudioPlayer::Sound::REST_START);
+            g_audioPlayer->play(IAudioPlayer::Sound::REST_START);
         } else if (strcmp(sound_name, "long_rest_start") == 0) {
-            g_audioPlayer->play(AudioPlayer::Sound::LONG_REST_START);
+            g_audioPlayer->play(IAudioPlayer::Sound::LONG_REST_START);
         } else if (strcmp(sound_name, "warning") == 0) {
-            g_audioPlayer->play(AudioPlayer::Sound::WARNING);
+            g_audioPlayer->play(IAudioPlayer::Sound::WARNING);
         }
     });
     Serial.println("[OK] Audio callbacks registered");

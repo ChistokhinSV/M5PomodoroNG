@@ -76,18 +76,22 @@ void GyroController::update() {
     }
 }
 
-bool GyroController::wasFlipped() const {
+bool GyroController::wasFlipped() {
     bool result = flip_flag;
-    // Note: Can't modify const member, caller must clear flag
+    flip_flag = false;  // Clear flag after reading (non-const behavior)
     return result;
 }
 
-bool GyroController::wasRotatedCW() const {
-    return rotate_cw_flag;
+bool GyroController::wasRotatedCW() {
+    bool result = rotate_cw_flag;
+    rotate_cw_flag = false;  // Clear flag after reading (non-const behavior)
+    return result;
 }
 
-bool GyroController::wasRotatedCCW() const {
-    return rotate_ccw_flag;
+bool GyroController::wasRotatedCCW() {
+    bool result = rotate_ccw_flag;
+    rotate_ccw_flag = false;  // Clear flag after reading (non-const behavior)
+    return result;
 }
 
 void GyroController::calibrate() {
