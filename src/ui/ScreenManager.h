@@ -105,6 +105,14 @@ private:
 
     // Hardware button helpers
     void updateButtonLabels();
+
+    // Network status handling (MP-47: queue-based communication)
+    void handleNetworkStatus();
+
+    // Network status tracking (for status bar updates)
+    bool wifi_connected_;
+    bool mqtt_connected_;
+    bool ntp_synced_;
 };
 
 #endif // SCREEN_MANAGER_H

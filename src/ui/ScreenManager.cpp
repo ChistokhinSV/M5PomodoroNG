@@ -1,4 +1,5 @@
 #include "ScreenManager.h"
+#include "../core/SyncPrimitives.h"
 #include <M5Unified.h>
 
 ScreenManager::ScreenManager(TimerStateMachine& state_machine,
@@ -16,7 +17,10 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
                     [this](ScreenID screen) { this->navigate(screen); }),
       current_screen_(ScreenID::MAIN),
       state_machine_(state_machine),
-      last_state_(TimerStateMachine::State::IDLE) {
+      last_state_(TimerStateMachine::State::IDLE),
+      wifi_connected_(false),
+      mqtt_connected_(false),
+      ntp_synced_(false) {
 
     // Configure hardware button bar
     button_bar_.setBounds(0, 218, 320, 22);
@@ -95,6 +99,9 @@ void ScreenManager::checkAutoNavigation() {
 }
 
 void ScreenManager::update(uint32_t deltaMs) {
+    // Check for network status updates from Core 1 (MP-47)
+    handleNetworkStatus();
+
     // Check for state-driven auto-navigation (PAUSED <-> MainScreen)
     checkAutoNavigation();
 
@@ -252,4 +259,83 @@ void ScreenManager::updateButtonLabels() {
 
     button_bar_.setLabels(labelA, labelB, labelC);
     button_bar_.setEnabled(enabledA, enabledB, enabledC);
+}
+
+void ScreenManager::handleNetworkStatus() {
+    // Process all pending network status messages from Core 1 (non-blocking)
+    // This allows Core 1 to send WiFi/MQTT/NTP status updates to Core 0 UI
+
+    NetworkStatus status;
+    bool status_changed = false;
+
+    // Drain queue (process up to 5 messages per frame to avoid UI lag)
+    int processed = 0;
+    while (processed < 5 && xQueueReceive(g_networkStatusQueue, &status, 0) == pdTRUE) {
+        processed++;
+
+        switch (status.event) {
+            case NetworkStatus::Event::WIFI_CONNECTING:
+                Serial.printf("[ScreenManager] Network: WiFi connecting... (RSSI: %d)\n", status.rssi);
+                wifi_connected_ = false;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::WIFI_CONNECTED:
+                Serial.printf("[ScreenManager] Network: WiFi connected (RSSI: %d dBm)\n", status.rssi);
+                wifi_connected_ = true;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::WIFI_DISCONNECTED:
+                Serial.printf("[ScreenManager] Network: WiFi disconnected - %s\n", status.message);
+                wifi_connected_ = false;
+                mqtt_connected_ = false;  // MQTT requires WiFi
+                ntp_synced_ = false;      // NTP requires WiFi
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::MQTT_CONNECTING:
+                Serial.printf("[ScreenManager] Network: MQTT connecting... (%s)\n", status.message);
+                mqtt_connected_ = false;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::MQTT_CONNECTED:
+                Serial.printf("[ScreenManager] Network: MQTT connected (%s)\n", status.message);
+                mqtt_connected_ = true;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::MQTT_DISCONNECTED:
+                Serial.printf("[ScreenManager] Network: MQTT disconnected - %s\n", status.message);
+                mqtt_connected_ = false;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::NTP_SYNCED:
+                Serial.printf("[ScreenManager] Network: NTP synced at %lu (%s)\n",
+                             status.timestamp, status.message);
+                ntp_synced_ = true;
+                status_changed = true;
+                break;
+
+            case NetworkStatus::Event::SYNC_ERROR:
+                Serial.printf("[ScreenManager] Network: Sync error - %s\n", status.message);
+                break;
+        }
+    }
+
+    if (processed > 0) {
+        Serial.printf("[ScreenManager] Processed %d network status updates from Core 1\n", processed);
+    }
+
+    // Update status bar if network status changed
+    // Note: This currently only updates WiFi status - full implementation will be in Phase 3
+    // For now, we just demonstrate the queue communication is working
+    if (status_changed) {
+        // Status bar will be updated by UITask polling battery/time/mode
+        // In Phase 3, this will trigger immediate status bar refresh with network info
+        Serial.printf("[ScreenManager] Network status: WiFi=%d MQTT=%d NTP=%d\n",
+                     wifi_connected_, mqtt_connected_, ntp_synced_);
+    }
 }

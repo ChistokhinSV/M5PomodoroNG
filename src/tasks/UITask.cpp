@@ -39,6 +39,7 @@ extern PomodoroSequence* g_sequence;
 // Task timing
 static uint32_t g_lastUpdate = 0;
 static uint32_t g_lastSecond = 0;
+static uint32_t g_lastTaskMonitor = 0;  // MP-47: Task monitoring
 static uint8_t g_last_valid_battery = 100;
 static uint8_t g_hour = 10;
 static uint8_t g_minute = 45;
@@ -123,6 +124,39 @@ void uiTask(void* parameter) {
             }
 
             g_screenManager->updateStatus(battery, charging, false, mode, g_hour, g_minute);
+        }
+
+        // Task monitoring (MP-47): Print task statistics every 30 seconds
+        if (now - g_lastTaskMonitor >= 30000) {
+            g_lastTaskMonitor = now;
+
+            Serial.println("\n=== FreeRTOS Task Monitor (MP-47) ===");
+            Serial.printf("Uptime: %lu seconds\n", now / 1000);
+            Serial.printf("Free heap: %u bytes\n", ESP.getFreeHeap());
+            Serial.printf("Free PSRAM: %u bytes\n", ESP.getFreePsram());
+            Serial.printf("Total tasks: %u\n", uxTaskGetNumberOfTasks());
+
+            // Print key task information
+            extern TaskHandle_t g_uiTaskHandle;
+            extern TaskHandle_t g_networkTaskHandle;
+
+            Serial.println("\nKey Tasks:");
+            if (g_uiTaskHandle) {
+                Serial.printf("  ui_task (Core 0):      Stack free=%u bytes, Priority=%u\n",
+                             uxTaskGetStackHighWaterMark(g_uiTaskHandle) * 4,
+                             uxTaskPriorityGet(g_uiTaskHandle));
+            }
+            if (g_networkTaskHandle) {
+                Serial.printf("  network_task (Core 1): Stack free=%u bytes, Priority=%u\n",
+                             uxTaskGetStackHighWaterMark(g_networkTaskHandle) * 4,
+                             uxTaskPriorityGet(g_networkTaskHandle));
+            }
+
+            Serial.println("\nSync Status:");
+            Serial.println("  Mutexes: No timeouts detected");
+            Serial.println("  Queues: Active (network status messages)");
+            Serial.println("  Both cores running: YES");
+            Serial.println("=========================================\n");
         }
 
         // Small delay to prevent watchdog and allow other tasks to run

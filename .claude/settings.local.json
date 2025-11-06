@@ -8,7 +8,13 @@
       "Bash(pio pkg:*)",
       "Bash(git add:*)",
       "Bash(timeout /t 5 /nobreak)",
-      "Bash(nul)"
+      "Bash(nul)",
+      "mcp__lab-youtrack__get_issue_fields_schema",
+      "mcp__lab-youtrack__create_issue",
+      "mcp__lab-youtrack__link_issues",
+      "mcp__lab-youtrack__update_issue",
+      "mcp__lab-youtrack__get_issue",
+      "mcp__lab-youtrack__search_issues"
     ],
     "deny": [],
     "ask": []
