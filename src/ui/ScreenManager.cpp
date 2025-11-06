@@ -18,6 +18,8 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
       current_screen_(ScreenID::MAIN),
       state_machine_(state_machine),
       last_state_(TimerStateMachine::State::IDLE),
+      sequence_(sequence),
+      config_(config),
       wifi_connected_(false),
       mqtt_connected_(false),
       ntp_synced_(false) {
@@ -46,6 +48,11 @@ void ScreenManager::navigate(ScreenID screen) {
     Serial.printf("[ScreenManager] Navigating: %s -> %s\n",
                   screen_names[(int)current_screen_],
                   screen_names[(int)screen]);
+
+    // MP-50: Reload timer config when returning from Settings to Main
+    if (current_screen_ == ScreenID::SETTINGS && screen == ScreenID::MAIN) {
+        reloadTimerConfig();
+    }
 
     current_screen_ = screen;
 
@@ -338,4 +345,42 @@ void ScreenManager::handleNetworkStatus() {
         Serial.printf("[ScreenManager] Network status: WiFi=%d MQTT=%d NTP=%d\n",
                      wifi_connected_, mqtt_connected_, ntp_synced_);
     }
+}
+
+void ScreenManager::reloadTimerConfig() {
+    // MP-50: Reload PomodoroSequence configuration from Config after Settings screen changes
+    Serial.println("[ScreenManager] Reloading timer config from Settings...");
+
+    auto pomodoro_config = config_.getPomodoro();
+
+    // Detect mode based on config values (same logic as main.cpp)
+    PomodoroSequence::Mode mode = PomodoroSequence::Mode::CLASSIC;
+    if (pomodoro_config.work_duration_min == 25 &&
+        pomodoro_config.short_break_min == 5 &&
+        pomodoro_config.long_break_min == 15 &&
+        pomodoro_config.sessions_before_long == 4) {
+        mode = PomodoroSequence::Mode::CLASSIC;
+        Serial.println("[ScreenManager] Mode: CLASSIC (25/5/15)");
+    } else if (pomodoro_config.work_duration_min == 45 &&
+               pomodoro_config.short_break_min == 15 &&
+               pomodoro_config.long_break_min == 30 &&
+               pomodoro_config.sessions_before_long == 4) {
+        mode = PomodoroSequence::Mode::STUDY;
+        Serial.println("[ScreenManager] Mode: STUDY (45/15/30)");
+    } else {
+        mode = PomodoroSequence::Mode::CUSTOM;
+        Serial.printf("[ScreenManager] Mode: CUSTOM (%d/%d/%d)\n",
+                     pomodoro_config.work_duration_min,
+                     pomodoro_config.short_break_min,
+                     pomodoro_config.long_break_min);
+    }
+
+    // Update sequence with new config
+    sequence_.setMode(mode);
+    sequence_.setSessionsBeforeLong(pomodoro_config.sessions_before_long);
+    sequence_.setWorkDuration(pomodoro_config.work_duration_min);
+    sequence_.setShortBreakDuration(pomodoro_config.short_break_min);
+    sequence_.setLongBreakDuration(pomodoro_config.long_break_min);
+
+    Serial.println("[ScreenManager] Timer config reloaded successfully");
 }

@@ -100,8 +100,13 @@ private:
     TimerStateMachine& state_machine_;
     TimerStateMachine::State last_state_;
 
+    // Timer configuration (MP-50: reload settings after Settings screen)
+    PomodoroSequence& sequence_;
+    Config& config_;
+
     // Auto-navigation logic
     void checkAutoNavigation();
+    void reloadTimerConfig();  // MP-50: Update sequence from config after settings change
 
     // Hardware button helpers
     void updateButtonLabels();
