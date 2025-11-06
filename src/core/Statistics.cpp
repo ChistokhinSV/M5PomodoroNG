@@ -1,4 +1,6 @@
 #include "Statistics.h"
+#include "SyncPrimitives.h"
+#include "../utils/MutexGuard.h"
 #include <Arduino.h>
 #include <sys/time.h>
 
@@ -30,6 +32,12 @@ bool Statistics::begin() {
 }
 
 void Statistics::recordWorkSession(uint16_t duration_min, bool completed) {
+    MutexGuard guard(g_stats_mutex, "g_stats_mutex", 100);
+    if (!guard.isLocked()) {
+        Serial.println("[Statistics] ERROR: Failed to acquire mutex in recordWorkSession");
+        return;
+    }
+
     if (!initialized) return;
 
     ensureTodayExists();
@@ -49,6 +57,12 @@ void Statistics::recordWorkSession(uint16_t duration_min, bool completed) {
 }
 
 void Statistics::recordBreakSession(uint16_t duration_min) {
+    MutexGuard guard(g_stats_mutex, "g_stats_mutex", 100);
+    if (!guard.isLocked()) {
+        Serial.println("[Statistics] ERROR: Failed to acquire mutex in recordBreakSession");
+        return;
+    }
+
     if (!initialized) return;
 
     ensureTodayExists();
@@ -61,6 +75,12 @@ void Statistics::recordBreakSession(uint16_t duration_min) {
 }
 
 void Statistics::recordInterruption() {
+    MutexGuard guard(g_stats_mutex, "g_stats_mutex", 100);
+    if (!guard.isLocked()) {
+        Serial.println("[Statistics] ERROR: Failed to acquire mutex in recordInterruption");
+        return;
+    }
+
     if (!initialized) return;
 
     ensureTodayExists();
@@ -73,6 +93,12 @@ void Statistics::recordInterruption() {
 }
 
 Statistics::DayStats Statistics::getToday() const {
+    MutexGuard guard(g_stats_mutex, "g_stats_mutex", 100);
+    if (!guard.isLocked()) {
+        Serial.println("[Statistics] ERROR: Failed to acquire mutex in getToday");
+        return DayStats{};  // Return empty stats on error
+    }
+
     return today_cache;
 }
 

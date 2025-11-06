@@ -4,6 +4,8 @@
 #include "PomodoroSequence.h"
 #include <cstdint>
 #include <functional>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 /**
  * Timer state machine implementing Pomodoro technique states and transitions
@@ -22,6 +24,12 @@
  * - STOP: Stop and reset timer
  * - TIMEOUT: Timer reached zero (auto-advances sequence)
  * - SKIP: Skip current session and advance
+ *
+ * Thread-Safety (MP-47):
+ * - All public methods are protected by internal mutex
+ * - Safe to call from any task (Core 0 or Core 1)
+ * - Timeout: 50ms (state operations are fast)
+ * - Uses RAII MutexGuard for automatic mutex release
  */
 class TimerStateMachine {
 public:
@@ -46,8 +54,9 @@ public:
     using AudioCallback = std::function<void(const char* sound_name)>;
 
     TimerStateMachine(PomodoroSequence& sequence);
+    ~TimerStateMachine();
 
-    // State machine control
+    // State machine control (thread-safe)
     bool handleEvent(Event event);
     State getState() const { return state; }
     const char* getStateName() const;
@@ -80,6 +89,9 @@ private:
     StateCallback state_callback = nullptr;
     TimeoutCallback timeout_callback = nullptr;
     AudioCallback audio_callback = nullptr;
+
+    // Thread-safety (MP-47)
+    SemaphoreHandle_t state_mutex_;  // Protects all state variables above
 
     // State transition logic
     bool transition(State new_state);

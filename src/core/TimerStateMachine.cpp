@@ -1,14 +1,35 @@
 #include "TimerStateMachine.h"
+#include "../utils/MutexGuard.h"
 #include <Arduino.h>
 
 TimerStateMachine::TimerStateMachine(PomodoroSequence& seq)
     : sequence(seq),
       state(State::IDLE),
       remaining_ms(0),
-      total_ms(0) {
+      total_ms(0),
+      state_mutex_(xSemaphoreCreateMutex()) {
+
+    if (state_mutex_ == NULL) {
+        Serial.println("[TimerStateMachine] ERROR: Failed to create state mutex");
+    } else {
+        Serial.println("[TimerStateMachine] Mutex created (thread-safe)");
+    }
+}
+
+TimerStateMachine::~TimerStateMachine() {
+    if (state_mutex_ != NULL) {
+        vSemaphoreDelete(state_mutex_);
+        state_mutex_ = NULL;
+    }
 }
 
 bool TimerStateMachine::handleEvent(Event event) {
+    MutexGuard guard(state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        Serial.println("[TimerStateMachine] ERROR: Failed to acquire mutex in handleEvent");
+        return false;
+    }
+
     if (!canTransition(event)) {
         Serial.printf("[StateMachine] Invalid event %d in state %d\n",
                       static_cast<int>(event), static_cast<int>(state));
@@ -79,6 +100,12 @@ bool TimerStateMachine::handleEvent(Event event) {
 }
 
 void TimerStateMachine::update(uint32_t delta_ms) {
+    MutexGuard guard(state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        Serial.println("[TimerStateMachine] ERROR: Failed to acquire mutex in update");
+        return;
+    }
+
     if (state != State::ACTIVE) {
         return;  // Timer not active
     }
@@ -97,6 +124,9 @@ void TimerStateMachine::update(uint32_t delta_ms) {
 
     if (delta_ms >= remaining_ms) {
         remaining_ms = 0;
+        // Note: handleEvent will acquire mutex again, but that's OK because we're using RAII guard
+        // The guard will release before handleEvent is called
+        guard.unlock();  // Explicit unlock before recursive call
         handleEvent(Event::TIMEOUT);
     } else {
         remaining_ms -= delta_ms;
@@ -104,6 +134,14 @@ void TimerStateMachine::update(uint32_t delta_ms) {
 }
 
 uint8_t TimerStateMachine::getProgressPercent() const {
+    // Note: Need to cast away const to use MutexGuard with const method
+    // This is safe because we're only reading, not modifying
+    TimerStateMachine* self = const_cast<TimerStateMachine*>(this);
+    MutexGuard guard(self->state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        return 0;  // Return safe value on mutex timeout
+    }
+
     if (total_ms == 0) return 0;
 
     uint32_t elapsed = total_ms - remaining_ms;
@@ -111,12 +149,26 @@ uint8_t TimerStateMachine::getProgressPercent() const {
 }
 
 void TimerStateMachine::getRemainingTime(uint8_t& minutes, uint8_t& seconds) const {
+    TimerStateMachine* self = const_cast<TimerStateMachine*>(this);
+    MutexGuard guard(self->state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        minutes = 0;
+        seconds = 0;
+        return;
+    }
+
     uint32_t total_seconds = remaining_ms / 1000;
     minutes = total_seconds / 60;
     seconds = total_seconds % 60;
 }
 
 const char* TimerStateMachine::getStateName() const {
+    TimerStateMachine* self = const_cast<TimerStateMachine*>(this);
+    MutexGuard guard(self->state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        return "UNKNOWN";
+    }
+
     switch (state) {
         case State::IDLE: return "IDLE";
         case State::ACTIVE: return "ACTIVE";
@@ -126,6 +178,12 @@ const char* TimerStateMachine::getStateName() const {
 }
 
 void TimerStateMachine::reset() {
+    MutexGuard guard(state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        Serial.println("[TimerStateMachine] ERROR: Failed to acquire mutex in reset");
+        return;
+    }
+
     stopTimer();
     transition(State::IDLE);
 }

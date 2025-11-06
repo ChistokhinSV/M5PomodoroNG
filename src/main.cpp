@@ -11,23 +11,31 @@
 #include "core/TimerStateMachine.h"
 #include "core/PomodoroSequence.h"
 #include "core/Statistics.h"
+#include "core/SyncPrimitives.h"
 #include "hardware/LEDController.h"
 #include "hardware/AudioPlayer.h"
+#include "tasks/UITask.h"
+#include "tasks/NetworkTask.h"
 
-Renderer renderer;
-uint32_t lastUpdate = 0;
-uint32_t lastSecond = 0;
+// ============================================================================
+// Global Pointers (accessed by FreeRTOS tasks)
+// ============================================================================
 
-// Core components
-Config config;
-PomodoroSequence sequence;
-TimerStateMachine stateMachine(sequence);  // Needs sequence reference
-Statistics statistics;
-LEDController ledController;
-AudioPlayer audioPlayer;
+// UI components (accessed by UITask on Core 0)
+Renderer* g_renderer = nullptr;
+ScreenManager* g_screenManager = nullptr;
+AudioPlayer* g_audioPlayer = nullptr;
 
-// Screen Manager (manages all screens and navigation)
-ScreenManager* screenManager = nullptr;
+// Core components (accessed by both cores)
+TimerStateMachine* g_stateMachine = nullptr;
+PomodoroSequence* g_sequence = nullptr;
+Statistics* g_statistics = nullptr;
+Config* g_config = nullptr;
+LEDController* g_ledController = nullptr;
+
+// FreeRTOS task handles (for monitoring)
+TaskHandle_t g_uiTaskHandle = NULL;
+extern TaskHandle_t g_networkTaskHandle;  // Defined in NetworkTask.cpp
 
 void setup() {
     // Initialize M5
@@ -51,50 +59,66 @@ void setup() {
         Serial.println("[WARN] No PSRAM detected");
     }
 
+    // Initialize FreeRTOS synchronization primitives (for dual-core architecture)
+    if (!initSyncPrimitives()) {
+        Serial.println("[ERROR] Failed to initialize synchronization primitives");
+        while (1) delay(100);  // Fatal error - cannot continue without sync objects
+    }
+    Serial.println("[OK] FreeRTOS synchronization primitives initialized");
+
+    // Allocate core components
+    g_renderer = new Renderer();
+    g_config = new Config();
+    g_statistics = new Statistics();
+    g_ledController = new LEDController();
+    g_audioPlayer = new AudioPlayer();
+    g_sequence = new PomodoroSequence();
+    g_stateMachine = new TimerStateMachine(*g_sequence);
+
     // Initialize renderer
-    if (!renderer.begin()) {
+    if (!g_renderer->begin()) {
         Serial.println("[ERROR] Failed to initialize renderer");
         while (1) delay(100);
     }
     Serial.println("[OK] Renderer initialized");
 
     // Initialize config
-    if (!config.begin()) {
+    if (!g_config->begin()) {
         Serial.println("[ERROR] Failed to initialize config");
     } else {
         Serial.println("[OK] Config initialized");
     }
 
     // Initialize statistics
-    if (!statistics.begin()) {
+    if (!g_statistics->begin()) {
         Serial.println("[ERROR] Failed to initialize statistics");
     } else {
         Serial.println("[OK] Statistics initialized");
     }
 
     // Initialize LED controller
-    if (!ledController.begin()) {
+    if (!g_ledController->begin()) {
         Serial.println("[ERROR] Failed to initialize LED controller");
     } else {
         Serial.println("[OK] LED controller initialized");
     }
 
     // Initialize audio player
-    if (!audioPlayer.begin()) {
+    if (!g_audioPlayer->begin()) {
         Serial.println("[ERROR] Failed to initialize audio player");
     } else {
         Serial.println("[OK] Audio player initialized");
 
         // Configure volume and mute from config
-        auto ui_config = config.getUI();
-        audioPlayer.setVolume(ui_config.sound_volume);
+        auto ui_config = g_config->getUI();
+        g_audioPlayer->setVolume(ui_config.sound_volume);
         if (!ui_config.sound_enabled) {
-            audioPlayer.mute();
+            g_audioPlayer->mute();
         }
     }
 
     // Initialize state machine and sequence
-    auto pomodoro_config = config.getPomodoro();
+    auto pomodoro_config = g_config->getPomodoro();
 
     // Detect mode based on config values
     PomodoroSequence::Mode mode = PomodoroSequence::Mode::CLASSIC;
@@ -108,32 +132,32 @@ void setup() {
         Serial.println("[Config] Using CLASSIC mode (default values)");
     }
 
-    sequence.setMode(mode);
-    sequence.setSessionsBeforeLong(pomodoro_config.sessions_before_long);
-    sequence.setWorkDuration(pomodoro_config.work_duration_min);
-    sequence.setShortBreakDuration(pomodoro_config.short_break_min);
-    sequence.setLongBreakDuration(pomodoro_config.long_break_min);
+    g_sequence->setMode(mode);
+    g_sequence->setSessionsBeforeLong(pomodoro_config.sessions_before_long);
+    g_sequence->setWorkDuration(pomodoro_config.work_duration_min);
+    g_sequence->setShortBreakDuration(pomodoro_config.short_break_min);
+    g_sequence->setLongBreakDuration(pomodoro_config.long_break_min);
     Serial.println("[OK] State machine and sequence initialized");
 
     // Register audio callback for state machine events
-    stateMachine.onAudioEvent([](const char* sound_name) {
+    g_stateMachine->onAudioEvent([](const char* sound_name) {
         if (strcmp(sound_name, "work_start") == 0) {
-            audioPlayer.play(AudioPlayer::Sound::WORK_START);
+            g_audioPlayer->play(AudioPlayer::Sound::WORK_START);
         } else if (strcmp(sound_name, "rest_start") == 0) {
-            audioPlayer.play(AudioPlayer::Sound::REST_START);
+            g_audioPlayer->play(AudioPlayer::Sound::REST_START);
         } else if (strcmp(sound_name, "long_rest_start") == 0) {
-            audioPlayer.play(AudioPlayer::Sound::LONG_REST_START);
+            g_audioPlayer->play(AudioPlayer::Sound::LONG_REST_START);
         } else if (strcmp(sound_name, "warning") == 0) {
-            audioPlayer.play(AudioPlayer::Sound::WARNING);
+            g_audioPlayer->play(AudioPlayer::Sound::WARNING);
         }
     });
     Serial.println("[OK] Audio callbacks registered");
 
     // Register timeout callback for auto-start logic
-    stateMachine.onTimeout([&]() {
+    g_stateMachine->onTimeout([]() {
         // After session completes and sequence advances, check if we should auto-start
-        auto session = sequence.getCurrentSession();
-        auto pomodoro_settings = config.getPomodoro();
+        auto session = g_sequence->getCurrentSession();
+        auto pomodoro_settings = g_config->getPomodoro();
 
         bool should_auto_start = false;
         if (session.type == PomodoroSequence::SessionType::WORK) {
@@ -146,7 +170,7 @@ void setup() {
         if (should_auto_start) {
             Serial.printf("[Main] Auto-starting next session: %s\n",
                          session.type == PomodoroSequence::SessionType::WORK ? "WORK" : "BREAK");
-            stateMachine.handleEvent(TimerStateMachine::Event::START);
+            g_stateMachine->handleEvent(TimerStateMachine::Event::START);
         } else {
             Serial.printf("[Main] Session ready: %s (manual start required)\n",
                          session.type == PomodoroSequence::SessionType::WORK ? "WORK" : "BREAK");
@@ -155,7 +179,7 @@ void setup() {
     Serial.println("[OK] Timeout callback registered (auto-start support)");
 
     // Create ScreenManager (owns all 4 screens)
-    screenManager = new ScreenManager(stateMachine, sequence, statistics, config, ledController);
+    g_screenManager = new ScreenManager(*g_stateMachine, *g_sequence, *g_statistics, *g_config, *g_ledController);
     Serial.println("[OK] ScreenManager initialized with 4 screens");
 
     // Note: M5Unified BtnA/B/C zones are fixed at y=240-320, cannot be adjusted
@@ -164,7 +188,7 @@ void setup() {
     // Update initial status
     uint8_t battery = M5.Power.getBatteryLevel();
     bool charging = M5.Power.isCharging();
-    screenManager->updateStatus(battery, charging, false, "IDLE", 10, 45);
+    g_screenManager->updateStatus(battery, charging, false, "IDLE", 10, 45);
 
     Serial.println("\nControls:");
     Serial.println("- MainScreen: [Start] [Stats] [Set] buttons");
@@ -177,84 +201,70 @@ void setup() {
     Serial.println("  MainScreen <-> PauseScreen (auto-managed by state machine)");
     Serial.println("\n[OK] All screens ready\n");
 
-    lastUpdate = millis();
-    lastSecond = millis();
+    // ========================================================================
+    // Create FreeRTOS Tasks (Dual-core Architecture)
+    // ========================================================================
+
+    Serial.println("=== Creating FreeRTOS Tasks ===");
+
+    // Create UI Task on Core 0 (Protocol CPU)
+    BaseType_t ui_result = xTaskCreatePinnedToCore(
+        uiTask,          // Task function
+        "ui_task",       // Task name (for debugging)
+        8192,            // Stack size (8KB)
+        NULL,            // Parameters (none)
+        1,               // Priority (default)
+        &g_uiTaskHandle, // Task handle (for monitoring)
+        0                // Core 0 (PRO_CPU - Protocol CPU)
+    );
+
+    if (ui_result != pdPASS) {
+        Serial.println("[ERROR] Failed to create UI task on Core 0");
+        while (1) delay(100);
+    }
+    Serial.println("[OK] UI task created on Core 0 (8KB stack, priority 1)");
+
+    // Create Network Task on Core 1 (Application CPU)
+    BaseType_t net_result = xTaskCreatePinnedToCore(
+        networkTask,           // Task function
+        "network_task",        // Task name (for debugging)
+        10240,                 // Stack size (10KB for TLS)
+        NULL,                  // Parameters (none)
+        1,                     // Priority (same as UI)
+        &g_networkTaskHandle,  // Task handle (for monitoring)
+        1                      // Core 1 (APP_CPU - Application CPU)
+    );
+
+    if (net_result != pdPASS) {
+        Serial.println("[ERROR] Failed to create network task on Core 1");
+        while (1) delay(100);
+    }
+    Serial.println("[OK] Network task created on Core 1 (10KB stack, priority 1)");
+
+    Serial.println("\n=== Multi-core Architecture Active ===");
+    Serial.println("Core 0: UI, input, state machine, audio, LEDs");
+    Serial.println("Core 1: Network (WiFi, MQTT, NTP) - skeleton in Phase 2");
+    Serial.println("======================================\n");
 }
 
 void loop() {
-    M5.update();
+    // ========================================================================
+    // Empty Loop - All Logic Moved to FreeRTOS Tasks
+    // ========================================================================
+    //
+    // The Arduino loop() function is no longer used. All application logic
+    // has been moved to FreeRTOS tasks:
+    //
+    // - uiTask (Core 0): Handles UI, input, rendering, audio, state machine
+    // - networkTask (Core 1): Handles WiFi, MQTT, NTP, cloud sync
+    //
+    // This loop() is kept for compatibility with Arduino framework but does
+    // nothing except yield to FreeRTOS scheduler.
+    //
+    // Note: Arduino setup()/loop() runs on Core 1 by default. Once we create
+    // tasks, setup() returns and loop() runs on Core 1, but it's idle since
+    // all work is done by our explicit tasks.
+    // ========================================================================
 
-    // Handle hardware button presses (BtnA/B/C capacitive touch zones)
-    screenManager->handleHardwareButtons();
-
-    // Handle touch events (for widgets like sliders/toggles)
-    auto touch = M5.Touch.getDetail();
-
-    if (touch.wasPressed()) {
-        screenManager->handleTouch(touch.x, touch.y, true);
-    }
-
-    if (touch.wasReleased()) {
-        screenManager->handleTouch(touch.x, touch.y, false);
-    }
-
-    // Update at 30 FPS (~33ms per frame)
-    uint32_t now = millis();
-    uint32_t deltaMs = now - lastUpdate;
-
-    if (deltaMs >= 33) {
-        lastUpdate = now;
-
-        // Update ScreenManager (which updates active screen)
-        screenManager->update(deltaMs);
-
-        // Update audio player (track playing state)
-        audioPlayer.update();
-
-        // Draw active screen
-        screenManager->draw(renderer);
-
-        // Push to display
-        renderer.update();
-    }
-
-    // Update status bar every second
-    if (now - lastSecond >= 1000) {
-        lastSecond = now;
-
-        // Update battery and time (with validation to avoid 0% glitches)
-        static uint8_t last_valid_battery = 100;
-        uint8_t battery = M5.Power.getBatteryLevel();
-
-        // Validate battery reading (M5.Power can return 0 on I2C glitches)
-        if (battery == 0 || battery > 100) {
-            battery = last_valid_battery;  // Use last known good value
-        } else {
-            last_valid_battery = battery;
-        }
-
-        bool charging = M5.Power.isCharging();
-
-        // Get current time (use millis for now, will use RTC later)
-        static uint8_t hour = 10;
-        static uint8_t minute = 45;
-        minute++;
-        if (minute >= 60) {
-            minute = 0;
-            hour = (hour + 1) % 24;
-        }
-
-        // Get current mode string
-        const char* mode = "IDLE";
-        auto state = stateMachine.getState();
-        if (state == TimerStateMachine::State::ACTIVE) {
-            mode = sequence.isWorkSession() ? "WORK" : "BREAK";
-        } else if (state == TimerStateMachine::State::PAUSED) {
-            mode = "PAUSED";
-        }
-
-        screenManager->updateStatus(battery, charging, false, mode, hour, minute);
-    }
-
-    delay(1);  // Prevent watchdog
+    vTaskDelay(pdMS_TO_TICKS(1000));  // Sleep 1 second, yield to tasks
 }

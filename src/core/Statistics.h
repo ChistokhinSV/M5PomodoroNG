@@ -4,6 +4,8 @@
 #include <Preferences.h>
 #include <cstdint>
 #include <ctime>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 /**
  * Statistics tracking and storage using ESP32 NVS
@@ -18,6 +20,12 @@
  * - Circular buffer: 90 days × 12 bytes = 1080 bytes
  * - Day index = epoch_days % 90
  * - Auto-cleanup of old data
+ *
+ * Thread-Safety (MP-47):
+ * - All public methods protected by g_stats_mutex (global mutex)
+ * - NVS operations can be slow (100ms), uses 100ms timeout
+ * - Safe to call from any task (Core 0 or Core 1)
+ * - Uses RAII MutexGuard for automatic mutex release
  */
 class Statistics {
 public:
