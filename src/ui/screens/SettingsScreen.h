@@ -2,16 +2,19 @@
 #define SETTINGSSCREEN_H
 
 #include <functional>
+#include "../Screen.h"
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/Button.h"
 #include "../widgets/Slider.h"
 #include "../widgets/Toggle.h"
 #include "../../core/Config.h"
+#include "../../core/PomodoroSequence.h"
 
 // Forward declare ScreenID from ScreenManager.h (avoid circular include)
 enum class ScreenID;
 using NavigationCallback = std::function<void(ScreenID)>;
+using ConfigChangedCallback = std::function<void()>;  // Notify parent when config changes
 
 /**
  * Settings screen - multi-page configuration UI
@@ -37,35 +40,38 @@ using NavigationCallback = std::function<void(ScreenID)>;
  * - Page 1: UI settings (6 options)
  * - Page 2: Power settings (4 options + Reset button)
  *
+ * Architecture (Single Responsibility):
+ * - Settings screen ONLY updates Config (NVS storage)
+ * - After each config change, calls config_changed_callback_
+ * - Parent (ScreenManager) reloads config into PomodoroSequence
+ * - UI sliders are visual feedback only, not source of truth
+ *
  * Features:
  * - 16 configurable settings across 3 pages
  * - Touch navigation between pages
  * - Immediate save to Config on value change
  * - Reset to defaults button on last page
  */
-class SettingsScreen {
+class SettingsScreen : public Screen {
 public:
-    SettingsScreen(Config& config, NavigationCallback navigate_callback);
+    SettingsScreen(Config& config, NavigationCallback navigate_callback, ConfigChangedCallback config_changed_callback);
 
-    // Lifecycle
-    void draw(Renderer& renderer);
-    void update(uint32_t deltaMs);
-    void handleTouch(int16_t x, int16_t y, bool pressed);
+    // Override Screen interface
+    void draw(Renderer& renderer) override;
+    void update(uint32_t deltaMs) override;
+    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
+    void onButtonA() override;  // Back to Main
+    void onButtonB() override;  // Previous page
+    void onButtonC() override;  // Next page
 
-    // Configuration
-    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
-    void markDirty() { needs_redraw_ = true; }
-
-    // Hardware button interface
+    // Extended button interface (with enabled flags)
     void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC,
                         bool& enabledA, bool& enabledB, bool& enabledC);
-    void onButtonA();  // Back to Main
-    void onButtonB();  // Previous page
-    void onButtonC();  // Next page
 
 private:
     Config& config_;
     NavigationCallback navigate_callback_;
+    ConfigChangedCallback config_changed_callback_;  // Notify parent to reload config → sequence
 
     // Widgets
     StatusBar status_bar_;
@@ -78,8 +84,9 @@ private:
     Button button_mode_study_;     // MP-50: Study preset (45/15/30)
     Button button_mode_custom_;    // MP-50: Custom preset (user-defined)
 
-    // Page 1: Timer settings (1 slider + 2 toggles)
+    // Page 1: Timer settings (2 sliders + 2 toggles)
     Slider slider_sessions_;
+    Slider slider_cycles_;
     Toggle toggle_auto_break_;
     Toggle toggle_auto_work_;
 
@@ -98,11 +105,11 @@ private:
     Slider slider_min_battery_;
 
     // Note: Navigation buttons removed, now using hardware buttons
+    // Note: needs_redraw_ inherited from Screen base class
 
     // State
     uint8_t current_page_;
     static constexpr uint8_t TOTAL_PAGES = 5;
-    bool needs_redraw_;
 
     // Layout constants
     static constexpr int16_t SCREEN_WIDTH = 320;
@@ -129,6 +136,7 @@ private:
     void onShortBreakChange(uint16_t value);
     void onLongBreakChange(uint16_t value);
     void onSessionsChange(uint16_t value);
+    void onCyclesChange(uint16_t value);
     void onAutoBreakChange(bool state);
     void onAutoWorkChange(bool state);
 
@@ -136,7 +144,6 @@ private:
     void onModeClassic();
     void onModeStudy();
     void onModeCustom();
-    void updateModeHighlights();  // Update button colors based on active mode
     void updateCustomButtonLabel();  // Update Custom button label with current template values
 
     void onBrightnessChange(uint16_t value);

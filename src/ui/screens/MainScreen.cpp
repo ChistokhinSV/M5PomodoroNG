@@ -4,14 +4,17 @@
 #include <stdio.h>
 #include <string.h>
 
+// MP-27: External LED controller for pattern testing
+extern ILEDController* g_ledController;
+
 MainScreen::MainScreen(TimerStateMachine& state_machine,
                        PomodoroSequence& sequence,
                        NavigationCallback navigate_callback)
     : state_machine_(state_machine),
       sequence_(sequence),
       navigate_callback_(navigate_callback),
-      last_update_ms_(0),
-      needs_redraw_(true) {
+      last_update_ms_(0) {
+    // Note: needs_redraw_ inherited from Screen base class, initialized to false
 
     TIMER_HEIGHT = uint16_t(TIMER_FONT.height);
 
@@ -54,7 +57,7 @@ void MainScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
 }
 
 void MainScreen::update(uint32_t deltaMs) {
-    // Update state machine
+    // Update state machine (MP-23: also updates LEDs via TimerStateMachine)
     state_machine_.update(deltaMs);
 
     // Update progress bar (0% at start, 100% at end)
@@ -68,17 +71,33 @@ void MainScreen::update(uint32_t deltaMs) {
     // Example: 3 sessions = 12 dots total, displayed as: ●●●● ●●●● ●●●●
     // Large spacing between groups = long break
     // Small spacing within groups = short breaks
-    sequence_indicator_.setTotalSessions(sequence_.getTotalSessions() * 4);
-    sequence_indicator_.setDotsPerGroup(4);  // 4 work intervals per session
+    // MP-51: Show work session progress with cycle grouping
+    sequence_indicator_.setTotalSessions(sequence_.getTotalWorkSessions());
+    sequence_indicator_.setDotsPerGroup(sequence_.getSessionsBeforeLong());  // Sessions per cycle
 
-    // Determine current work session index (0-based)
-    // During work: working on next work session after completed ones
-    // During break: doesn't matter, we pulse the last completed work session
-    uint8_t current_work_session = sequence_.getCompletedToday();
+    // MP-XX: Fix breadcrumb indicator for session 5+ (cycle wrap)
+    // Convert 1-based session (1-4) to 0-based index (0-3) for SequenceIndicator
+    uint8_t current_work_session = sequence_.getCurrentWorkSession() - 1;
+
+    // Calculate completed sessions within current cycle (resets after each cycle)
+    uint8_t completed = sequence_.getCompletedToday();
+    uint8_t total = sequence_.getTotalWorkSessions();
+    uint8_t completed_sessions = completed % total;
+
     bool in_break = !sequence_.isWorkSession();
 
+    // DEBUG: Log breadcrumb calculation (every 60 frames ~2 sec)
+    static uint8_t breadcrumb_log_counter = 0;
+    if (++breadcrumb_log_counter >= 60) {
+        breadcrumb_log_counter = 0;
+        Serial.printf("[BREADCRUMB DEBUG] getCurrentWorkSession()=%d, getCompletedToday()=%d, getTotalWorkSessions()=%d\n",
+                     sequence_.getCurrentWorkSession(), sequence_.getCompletedToday(), sequence_.getTotalWorkSessions());
+        Serial.printf("[BREADCRUMB DEBUG] current_work_session=%d, completed_sessions=%d, in_break=%s\n",
+                     current_work_session, completed_sessions, in_break ? "YES" : "NO");
+    }
+
     sequence_indicator_.setSession(current_work_session,
-                                   sequence_.getCompletedToday(),
+                                   completed_sessions,
                                    in_break);
 
     // Update button visibility based on state
@@ -124,42 +143,19 @@ void MainScreen::draw(Renderer& renderer) {
     needs_redraw_ = false;
 }
 
-void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    // Touch handling removed - now uses hardware buttons
-    // Hardware button handling done by ScreenManager via onButtonA/B/C()
-}
+// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
 
 void MainScreen::drawModeLabel(Renderer& renderer) {
-    // Draw "Session X/Y [Mode]" text
+    // Draw "Session X/Y" text (work sessions only)
     char label[32];
     auto session = sequence_.getCurrentSession();
-    uint8_t total_sessions = sequence_.getTotalSessions();
 
-    // Calculate current work session number (not total session including breaks)
-    uint8_t current_work_session;
-    if (sequence_.isWorkSession()) {
-        // Working on next work session
-        current_work_session = sequence_.getCompletedToday() + 1;
-    } else {
-        // Resting after completing a work session
-        current_work_session = sequence_.getCompletedToday();
-    }
+    // Use new methods to track work sessions (not intervals)
+    uint8_t current_work_session = sequence_.getCurrentWorkSession();
+    uint8_t total_work_sessions = sequence_.getTotalWorkSessions();
 
-    const char* mode_name = "Classic";
-    switch (sequence_.getMode()) {
-        case PomodoroSequence::Mode::CLASSIC:
-            mode_name = "Classic";
-            break;
-        case PomodoroSequence::Mode::STUDY:
-            mode_name = "Study";
-            break;
-        case PomodoroSequence::Mode::CUSTOM:
-            mode_name = "Custom";
-            break;
-    }
-
-    snprintf(label, sizeof(label), "Session %d/%d [%s]",
-             current_work_session, total_sessions, mode_name);
+    snprintf(label, sizeof(label), "Session %d/%d",
+             current_work_session, total_work_sessions);
 
     int16_t y = STATUS_BAR_HEIGHT + 5;
     renderer.setTextDatum(TC_DATUM);  // Top-center

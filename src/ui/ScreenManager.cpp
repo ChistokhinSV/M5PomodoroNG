@@ -6,13 +6,15 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
                              PomodoroSequence& sequence,
                              Statistics& statistics,
                              Config& config,
-                             ILEDController& led_controller)
+                             ILEDController& led_controller,
+                             IHapticController& haptic_controller)
     : main_screen_(state_machine, sequence,
                    [this](ScreenID screen) { this->navigate(screen); }),
       stats_screen_(statistics,
                     [this](ScreenID screen) { this->navigate(screen); }),
       settings_screen_(config,
-                       [this](ScreenID screen) { this->navigate(screen); }),
+                       [this](ScreenID screen) { this->navigate(screen); },
+                       [this]() { this->reloadTimerConfig(); }),
       pause_screen_(state_machine, led_controller,
                     [this](ScreenID screen) { this->navigate(screen); }),
       current_screen_(ScreenID::MAIN),
@@ -20,6 +22,7 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
       last_state_(TimerStateMachine::State::IDLE),
       sequence_(sequence),
       config_(config),
+      haptic_controller_(haptic_controller),
       wifi_connected_(false),
       mqtt_connected_(false),
       ntp_synced_(false) {
@@ -184,6 +187,7 @@ void ScreenManager::handleHardwareButtons() {
 
     if (M5.BtnA.wasPressed()) {
         Serial.println("[ScreenManager] BtnA pressed");
+        haptic_controller_.trigger(IHapticController::Pattern::BUTTON_PRESS);  // MP-27: 50ms buzz
         switch (current_screen_) {
             case ScreenID::MAIN:
                 main_screen_.onButtonA();
@@ -203,6 +207,7 @@ void ScreenManager::handleHardwareButtons() {
 
     if (M5.BtnB.wasPressed()) {
         Serial.println("[ScreenManager] BtnB pressed");
+        haptic_controller_.trigger(IHapticController::Pattern::BUTTON_PRESS);  // MP-27: 50ms buzz
         switch (current_screen_) {
             case ScreenID::MAIN:
                 main_screen_.onButtonB();
@@ -222,6 +227,7 @@ void ScreenManager::handleHardwareButtons() {
 
     if (M5.BtnC.wasPressed()) {
         Serial.println("[ScreenManager] BtnC pressed");
+        haptic_controller_.trigger(IHapticController::Pattern::BUTTON_PRESS);  // MP-27: 50ms buzz
         switch (current_screen_) {
             case ScreenID::MAIN:
                 main_screen_.onButtonC();
@@ -351,25 +357,9 @@ void ScreenManager::reloadTimerConfig() {
     // MP-50: Reload PomodoroSequence configuration from Config after Settings screen changes
     auto pomodoro_config = config_.getPomodoro();
 
-    // Detect mode based on config values (same logic as main.cpp)
-    PomodoroSequence::Mode mode = PomodoroSequence::Mode::CLASSIC;
-    if (pomodoro_config.work_duration_min == 25 &&
-        pomodoro_config.short_break_min == 5 &&
-        pomodoro_config.long_break_min == 15 &&
-        pomodoro_config.sessions_before_long == 4) {
-        mode = PomodoroSequence::Mode::CLASSIC;
-    } else if (pomodoro_config.work_duration_min == 45 &&
-               pomodoro_config.short_break_min == 15 &&
-               pomodoro_config.long_break_min == 30 &&
-               pomodoro_config.sessions_before_long == 2) {
-        mode = PomodoroSequence::Mode::STUDY;
-    } else {
-        mode = PomodoroSequence::Mode::CUSTOM;
-    }
-
     // Update sequence with new config
-    sequence_.setMode(mode);
     sequence_.setSessionsBeforeLong(pomodoro_config.sessions_before_long);
+    sequence_.setNumCycles(pomodoro_config.num_cycles);
     sequence_.setWorkDuration(pomodoro_config.work_duration_min);
     sequence_.setShortBreakDuration(pomodoro_config.short_break_min);
     sequence_.setLongBreakDuration(pomodoro_config.long_break_min);

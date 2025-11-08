@@ -3,11 +3,12 @@
 #include <M5Unified.h>
 #include <stdio.h>
 
-SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callback)
+SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callback, ConfigChangedCallback config_changed_callback)
     : config_(config),
       navigate_callback_(navigate_callback),
-      current_page_(0),
-      needs_redraw_(true) {
+      config_changed_callback_(config_changed_callback),
+      current_page_(0) {
+    // Note: needs_redraw_ inherited from Screen base class
 
     // Configure status bar
     status_bar_.setBounds(0, 0, SCREEN_WIDTH, STATUS_BAR_HEIGHT);
@@ -24,7 +25,7 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     // Page 0: Timer settings (3 sliders)
     slider_work_duration_.setBounds(10, y, 300, WIDGET_HEIGHT);
     slider_work_duration_.setLabel("Work:");
-    slider_work_duration_.setRange(5, 90);
+    slider_work_duration_.setRange(1, 90);  // TODO(ChistokhinSV): return back to (5, 90)
     slider_work_duration_.setDisplayMode(Slider::DisplayMode::TIME_MIN);
     slider_work_duration_.setCallback([this](uint16_t val) { this->onWorkDurationChange(val); });
     slider_work_duration_.setMarginBottom(10);
@@ -64,15 +65,23 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     button_mode_custom_.setLabel("Custom", "...");  // Will be updated in loadFromConfig()
     button_mode_custom_.setCallback([this]() { this->onModeCustom(); });
 
-    // Page 1: Timer settings (1 slider + 2 toggles)
+    // Page 1: Timer settings (2 sliders + 2 toggles)
     y = widget_start_y;
     slider_sessions_.setBounds(10, y, 300, WIDGET_HEIGHT);
-    slider_sessions_.setLabel("Sessions:");
+    slider_sessions_.setLabel("Per Cycle:");
     slider_sessions_.setRange(1, 8);
     slider_sessions_.setDisplayMode(Slider::DisplayMode::NUMERIC);
     slider_sessions_.setCallback([this](uint16_t val) { this->onSessionsChange(val); });
     slider_sessions_.setMarginBottom(10);
     y += slider_sessions_.getTotalHeight();
+
+    slider_cycles_.setBounds(10, y, 300, WIDGET_HEIGHT);
+    slider_cycles_.setLabel("Cycles:");
+    slider_cycles_.setRange(1, 4);
+    slider_cycles_.setDisplayMode(Slider::DisplayMode::NUMERIC);
+    slider_cycles_.setCallback([this](uint16_t val) { this->onCyclesChange(val); });
+    slider_cycles_.setMarginBottom(10);
+    y += slider_cycles_.getTotalHeight();
 
     toggle_auto_break_.setBounds(10, y, 300, 20);  // Toggle height = 20px
     toggle_auto_break_.setLabel("Auto-start breaks");
@@ -158,6 +167,34 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     slider_min_battery_.setCallback([this](uint16_t val) { this->onMinBatteryChange(val); });
     slider_min_battery_.setMarginBottom(10);
 
+    // Register all touch-enabled widgets with TouchEventManager
+    // Note: Widget visibility is controlled by update() based on current_page_
+    // Page 0 widgets
+    registerWidget(&slider_work_duration_);
+    registerWidget(&slider_short_break_);
+    registerWidget(&slider_long_break_);
+    registerWidget(&button_mode_classic_);
+    registerWidget(&button_mode_study_);
+    registerWidget(&button_mode_custom_);
+    // Page 1 widgets
+    registerWidget(&slider_sessions_);
+    registerWidget(&slider_cycles_);
+    registerWidget(&toggle_auto_break_);
+    registerWidget(&toggle_auto_work_);
+    // Page 2 widgets
+    registerWidget(&slider_brightness_);
+    registerWidget(&toggle_sound_);
+    registerWidget(&slider_volume_);
+    // Page 3 widgets
+    registerWidget(&toggle_haptic_);
+    registerWidget(&toggle_show_seconds_);
+    registerWidget(&slider_timeout_);
+    // Page 4 widgets
+    registerWidget(&toggle_auto_sleep_);
+    registerWidget(&slider_sleep_after_);
+    registerWidget(&toggle_wake_rotation_);
+    registerWidget(&slider_min_battery_);
+
     // Load initial values from Config
     loadFromConfig();
 }
@@ -169,6 +206,7 @@ void SettingsScreen::loadFromConfig() {
     slider_short_break_.setValue(pomodoro.short_break_min);
     slider_long_break_.setValue(pomodoro.long_break_min);
     slider_sessions_.setValue(pomodoro.sessions_before_long);
+    slider_cycles_.setValue(pomodoro.num_cycles);
     toggle_auto_break_.setState(pomodoro.auto_start_breaks);
     toggle_auto_work_.setState(pomodoro.auto_start_work);
 
@@ -188,9 +226,8 @@ void SettingsScreen::loadFromConfig() {
     toggle_wake_rotation_.setState(power.wake_on_rotation);
     slider_min_battery_.setValue(power.min_battery_percent);
 
-    // MP-50: Set initial mode button highlights and custom label
+    // MP-50: Set initial custom button label
     updateCustomButtonLabel();
-    updateModeHighlights();
 }
 
 void SettingsScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
@@ -202,29 +239,73 @@ void SettingsScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
 }
 
 void SettingsScreen::update(uint32_t deltaMs) {
-    // Update widgets on current page only
+    // Update status bar (always visible)
     status_bar_.update(deltaMs);
 
+    // Hide all widgets first (so TouchEventManager skips them)
+    slider_work_duration_.setVisible(false);
+    slider_short_break_.setVisible(false);
+    slider_long_break_.setVisible(false);
+    button_mode_classic_.setVisible(false);
+    button_mode_study_.setVisible(false);
+    button_mode_custom_.setVisible(false);
+    slider_sessions_.setVisible(false);
+    slider_cycles_.setVisible(false);
+    toggle_auto_break_.setVisible(false);
+    toggle_auto_work_.setVisible(false);
+    slider_brightness_.setVisible(false);
+    toggle_sound_.setVisible(false);
+    slider_volume_.setVisible(false);
+    toggle_haptic_.setVisible(false);
+    toggle_show_seconds_.setVisible(false);
+    slider_timeout_.setVisible(false);
+    toggle_auto_sleep_.setVisible(false);
+    slider_sleep_after_.setVisible(false);
+    toggle_wake_rotation_.setVisible(false);
+    slider_min_battery_.setVisible(false);
+
+    // Show and update only widgets on current page
     if (current_page_ == 0) {
+        slider_work_duration_.setVisible(true);
+        slider_short_break_.setVisible(true);
+        slider_long_break_.setVisible(true);
+        button_mode_classic_.setVisible(true);
+        button_mode_study_.setVisible(true);
+        button_mode_custom_.setVisible(true);
         slider_work_duration_.update(deltaMs);
         slider_short_break_.update(deltaMs);
         slider_long_break_.update(deltaMs);
-        button_mode_classic_.update(deltaMs);  // MP-50
-        button_mode_study_.update(deltaMs);    // MP-50
-        button_mode_custom_.update(deltaMs);   // MP-50
+        button_mode_classic_.update(deltaMs);
+        button_mode_study_.update(deltaMs);
+        button_mode_custom_.update(deltaMs);
     } else if (current_page_ == 1) {
+        slider_sessions_.setVisible(true);
+        slider_cycles_.setVisible(true);
+        toggle_auto_break_.setVisible(true);
+        toggle_auto_work_.setVisible(true);
         slider_sessions_.update(deltaMs);
+        slider_cycles_.update(deltaMs);
         toggle_auto_break_.update(deltaMs);
         toggle_auto_work_.update(deltaMs);
     } else if (current_page_ == 2) {
+        slider_brightness_.setVisible(true);
+        toggle_sound_.setVisible(true);
+        slider_volume_.setVisible(true);
         slider_brightness_.update(deltaMs);
         toggle_sound_.update(deltaMs);
         slider_volume_.update(deltaMs);
     } else if (current_page_ == 3) {
+        toggle_haptic_.setVisible(true);
+        toggle_show_seconds_.setVisible(true);
+        slider_timeout_.setVisible(true);
         toggle_haptic_.update(deltaMs);
         toggle_show_seconds_.update(deltaMs);
         slider_timeout_.update(deltaMs);
     } else if (current_page_ == 4) {
+        toggle_auto_sleep_.setVisible(true);
+        slider_sleep_after_.setVisible(true);
+        toggle_wake_rotation_.setVisible(true);
+        slider_min_battery_.setVisible(true);
         toggle_auto_sleep_.update(deltaMs);
         slider_sleep_after_.update(deltaMs);
         toggle_wake_rotation_.update(deltaMs);
@@ -265,63 +346,8 @@ void SettingsScreen::draw(Renderer& renderer) {
     needs_redraw_ = false;
 }
 
-void SettingsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    if (pressed) {
-        // Touch down - check widgets on current page
-        if (current_page_ == 0) {
-            if (slider_work_duration_.hitTest(x, y)) slider_work_duration_.onTouch(x, y);
-            else if (slider_short_break_.hitTest(x, y)) slider_short_break_.onTouch(x, y);
-            else if (slider_long_break_.hitTest(x, y)) slider_long_break_.onTouch(x, y);
-            else if (button_mode_classic_.hitTest(x, y)) button_mode_classic_.onTouch(x, y);  // MP-50
-            else if (button_mode_study_.hitTest(x, y)) button_mode_study_.onTouch(x, y);      // MP-50
-            else if (button_mode_custom_.hitTest(x, y)) button_mode_custom_.onTouch(x, y);    // MP-50
-        } else if (current_page_ == 1) {
-            if (slider_sessions_.hitTest(x, y)) slider_sessions_.onTouch(x, y);
-            else if (toggle_auto_break_.hitTest(x, y)) toggle_auto_break_.onTouch(x, y);
-            else if (toggle_auto_work_.hitTest(x, y)) toggle_auto_work_.onTouch(x, y);
-        } else if (current_page_ == 2) {
-            if (slider_brightness_.hitTest(x, y)) slider_brightness_.onTouch(x, y);
-            else if (toggle_sound_.hitTest(x, y)) toggle_sound_.onTouch(x, y);
-            else if (slider_volume_.hitTest(x, y)) slider_volume_.onTouch(x, y);
-        } else if (current_page_ == 3) {
-            if (toggle_haptic_.hitTest(x, y)) toggle_haptic_.onTouch(x, y);
-            else if (toggle_show_seconds_.hitTest(x, y)) toggle_show_seconds_.onTouch(x, y);
-            else if (slider_timeout_.hitTest(x, y)) slider_timeout_.onTouch(x, y);
-        } else if (current_page_ == 4) {
-            if (toggle_auto_sleep_.hitTest(x, y)) toggle_auto_sleep_.onTouch(x, y);
-            else if (slider_sleep_after_.hitTest(x, y)) slider_sleep_after_.onTouch(x, y);
-            else if (toggle_wake_rotation_.hitTest(x, y)) toggle_wake_rotation_.onTouch(x, y);
-            else if (slider_min_battery_.hitTest(x, y)) slider_min_battery_.onTouch(x, y);
-        }
-    } else {
-        // Touch up - release widgets
-        if (current_page_ == 0) {
-            slider_work_duration_.onRelease(x, y);
-            slider_short_break_.onRelease(x, y);
-            slider_long_break_.onRelease(x, y);
-            button_mode_classic_.onRelease(x, y);  // MP-50
-            button_mode_study_.onRelease(x, y);    // MP-50
-            button_mode_custom_.onRelease(x, y);   // MP-50
-        } else if (current_page_ == 1) {
-            slider_sessions_.onRelease(x, y);
-            toggle_auto_break_.onRelease(x, y);
-            toggle_auto_work_.onRelease(x, y);
-        } else if (current_page_ == 2) {
-            slider_brightness_.onRelease(x, y);
-            toggle_sound_.onRelease(x, y);
-            slider_volume_.onRelease(x, y);
-        } else if (current_page_ == 3) {
-            toggle_haptic_.onRelease(x, y);
-            toggle_show_seconds_.onRelease(x, y);
-            slider_timeout_.onRelease(x, y);
-        } else if (current_page_ == 4) {
-            toggle_auto_sleep_.onRelease(x, y);
-            slider_sleep_after_.onRelease(x, y);
-            toggle_wake_rotation_.onRelease(x, y);
-            slider_min_battery_.onRelease(x, y);
-        }
-    }
-}
+// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
+// Widget visibility based on current_page_ ensures only visible widgets receive events
 
 void SettingsScreen::drawTitle(Renderer& renderer) {
     // Draw page title
@@ -367,8 +393,9 @@ void SettingsScreen::drawPage0(Renderer& renderer) {
 }
 
 void SettingsScreen::drawPage1(Renderer& renderer) {
-    // Page 1: Timer settings (1 slider + 2 toggles)
+    // Page 1: Timer settings (2 sliders + 2 toggles)
     slider_sessions_.draw(renderer);
+    slider_cycles_.draw(renderer);
     toggle_auto_break_.draw(renderer);
     toggle_auto_work_.draw(renderer);
 }
@@ -409,7 +436,6 @@ void SettingsScreen::onWorkDurationChange(uint16_t value) {
 
     config_.setPomodoro(pomodoro);
     updateCustomButtonLabel();  // MP-50: Update Custom button label
-    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onShortBreakChange(uint16_t value) {
@@ -425,7 +451,6 @@ void SettingsScreen::onShortBreakChange(uint16_t value) {
 
     config_.setPomodoro(pomodoro);
     updateCustomButtonLabel();  // MP-50: Update Custom button label
-    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onLongBreakChange(uint16_t value) {
@@ -441,13 +466,20 @@ void SettingsScreen::onLongBreakChange(uint16_t value) {
 
     config_.setPomodoro(pomodoro);
     updateCustomButtonLabel();  // MP-50: Update Custom button label
-    updateModeHighlights();  // MP-50: Update mode button highlighting
 }
 
 void SettingsScreen::onSessionsChange(uint16_t value) {
     auto pomodoro = config_.getPomodoro();
     pomodoro.sessions_before_long = value;
     config_.setPomodoro(pomodoro);
+    config_changed_callback_();  // Notify parent to reload config → sequence
+}
+
+void SettingsScreen::onCyclesChange(uint16_t value) {
+    auto pomodoro = config_.getPomodoro();
+    pomodoro.num_cycles = value;
+    config_.setPomodoro(pomodoro);
+    config_changed_callback_();  // Notify parent to reload config → sequence
 }
 
 void SettingsScreen::onAutoBreakChange(bool state) {
@@ -544,11 +576,12 @@ void SettingsScreen::onModeClassic() {
         pomodoro.custom_long_break_min = pomodoro.long_break_min;
     }
 
-    // Apply Classic preset (25/5/15, 4 sessions)
+    // Apply Classic preset (25/5/15, 4 sessions, 1 cycle)
     pomodoro.work_duration_min = 25;
     pomodoro.short_break_min = 5;
     pomodoro.long_break_min = 15;
     pomodoro.sessions_before_long = 4;
+    pomodoro.num_cycles = 1;
     config_.setPomodoro(pomodoro);
 
     // Update UI sliders
@@ -556,16 +589,19 @@ void SettingsScreen::onModeClassic() {
     slider_short_break_.setValue(5);
     slider_long_break_.setValue(15);
     slider_sessions_.setValue(4);
+    slider_cycles_.setValue(1);
+
+    // Notify parent to reload config → sequence (single responsibility)
+    config_changed_callback_();
 
     updateCustomButtonLabel();  // Update Custom button with saved template
-    updateModeHighlights();
 }
 
 void SettingsScreen::onModeStudy() {
-    Serial.println("[SettingsScreen] Mode: Study (45/15/30, 2 sessions)");
+    Serial.println("[SettingsScreen] Mode: Study (45/15/30, 2 sessions per cycle)");
     auto pomodoro = config_.getPomodoro();
 
-    // Save current values to custom template if they don't match Classic or Study
+    // MP-51: Save current values to custom template if they don't match Classic or Study
     bool is_classic = (pomodoro.work_duration_min == 25 &&
                        pomodoro.short_break_min == 5 &&
                        pomodoro.long_break_min == 15 &&
@@ -580,11 +616,12 @@ void SettingsScreen::onModeStudy() {
         pomodoro.custom_long_break_min = pomodoro.long_break_min;
     }
 
-    // Apply Study preset (45/15/30, 2 sessions)
+    // Apply Study preset (45/15/30, 2 sessions per cycle, 2 cycles)
     pomodoro.work_duration_min = 45;
     pomodoro.short_break_min = 15;
     pomodoro.long_break_min = 30;
     pomodoro.sessions_before_long = 2;
+    pomodoro.num_cycles = 2;
     config_.setPomodoro(pomodoro);
 
     // Update UI sliders
@@ -592,9 +629,12 @@ void SettingsScreen::onModeStudy() {
     slider_short_break_.setValue(15);
     slider_long_break_.setValue(30);
     slider_sessions_.setValue(2);
+    slider_cycles_.setValue(2);
+
+    // Notify parent to reload config → sequence (single responsibility)
+    config_changed_callback_();
 
     updateCustomButtonLabel();  // Update Custom button with saved template
-    updateModeHighlights();
 }
 
 void SettingsScreen::onModeCustom() {
@@ -612,7 +652,8 @@ void SettingsScreen::onModeCustom() {
     slider_short_break_.setValue(pomodoro.custom_short_break_min);
     slider_long_break_.setValue(pomodoro.custom_long_break_min);
 
-    updateModeHighlights();
+    // Notify parent to reload config → sequence (single responsibility)
+    config_changed_callback_();
 }
 
 void SettingsScreen::updateCustomButtonLabel() {
@@ -624,39 +665,6 @@ void SettingsScreen::updateCustomButtonLabel() {
              pomodoro.custom_short_break_min,
              pomodoro.custom_long_break_min);
     button_mode_custom_.setLabel("Custom", label);
-}
-
-void SettingsScreen::updateModeHighlights() {
-    // Detect current mode based on slider values
-    auto pomodoro = config_.getPomodoro();
-    bool is_classic = (pomodoro.work_duration_min == 25 &&
-                       pomodoro.short_break_min == 5 &&
-                       pomodoro.long_break_min == 15 &&
-                       pomodoro.sessions_before_long == 4);
-    bool is_study = (pomodoro.work_duration_min == 45 &&
-                     pomodoro.short_break_min == 15 &&
-                     pomodoro.long_break_min == 30 &&
-                     pomodoro.sessions_before_long == 2);
-
-    // Set button colors (highlighted = green, normal = blue)
-    Renderer::Color green = Renderer::Color(0x2ECC71);   // Highlighted
-    Renderer::Color blue = Renderer::Color(0x4A90E2);    // Normal
-    Renderer::Color green_pressed = Renderer::Color(0x27AE60);
-    Renderer::Color blue_pressed = Renderer::Color(0x2E5C8A);
-
-    if (is_classic) {
-        button_mode_classic_.setColors(green, green_pressed);
-        button_mode_study_.setColors(blue, blue_pressed);
-        button_mode_custom_.setColors(blue, blue_pressed);
-    } else if (is_study) {
-        button_mode_classic_.setColors(blue, blue_pressed);
-        button_mode_study_.setColors(green, green_pressed);
-        button_mode_custom_.setColors(blue, blue_pressed);
-    } else {
-        button_mode_classic_.setColors(blue, blue_pressed);
-        button_mode_study_.setColors(blue, blue_pressed);
-        button_mode_custom_.setColors(green, green_pressed);
-    }
 }
 
 // Hardware button interface implementation

@@ -12,6 +12,7 @@
 #include "../core/Statistics.h"
 #include "../core/Config.h"
 #include "../hardware/ILEDController.h"
+#include "../hardware/IHapticController.h"
 #include "Renderer.h"
 
 /**
@@ -67,7 +68,8 @@ public:
                   PomodoroSequence& sequence,
                   Statistics& statistics,
                   Config& config,
-                  ILEDController& led_controller);
+                  ILEDController& led_controller,
+                  IHapticController& haptic_controller);
 
     // Navigation
     void navigate(ScreenID screen);
@@ -103,6 +105,9 @@ private:
     // Timer configuration (MP-50: reload settings after Settings screen)
     PomodoroSequence& sequence_;
     Config& config_;
+
+    // Hardware controllers (MP-27: Haptic feedback for button presses)
+    IHapticController& haptic_controller_;
 
     // Auto-navigation logic
     void checkAutoNavigation();
