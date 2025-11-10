@@ -2,6 +2,7 @@
 #define PAUSESCREEN_H
 
 #include <functional>
+#include "../Screen.h"
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/Button.h"
@@ -38,26 +39,20 @@ using NavigationCallback = std::function<void(ScreenID)>;
  * - Stop button → return to IDLE state
  * - Pulsing amber LED effect
  */
-class PauseScreen {
+class PauseScreen : public Screen {
 public:
     PauseScreen(TimerStateMachine& state_machine,
                 ILEDController& led_controller,
                 NavigationCallback navigate_callback);
 
-    // Lifecycle
-    void draw(Renderer& renderer);
-    void update(uint32_t deltaMs);
-    void handleTouch(int16_t x, int16_t y, bool pressed);
-
-    // Configuration
-    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
-    void markDirty() { needs_redraw_ = true; }
-
-    // Hardware button interface
-    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC);
-    void onButtonA();  // Resume timer
-    void onButtonB();  // (unused)
-    void onButtonC();  // Stop timer
+    // Override Screen interface
+    void draw(Renderer& renderer) override;
+    void update(uint32_t deltaMs) override;
+    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) override;
+    void onButtonA() override;  // Resume timer
+    void onButtonB() override;  // (unused)
+    void onButtonC() override;  // Stop timer
 
 private:
     TimerStateMachine& state_machine_;
@@ -67,9 +62,10 @@ private:
     // Widgets
     StatusBar status_bar_;
     // Note: Button widgets removed, now using hardware buttons
+    // Note: needs_redraw_ inherited from Screen base class
 
     // State
-    bool needs_redraw_;
+    bool led_pattern_set_;  // Track if LED pattern already set (prevent spam)
 
     // Layout constants
     static constexpr int16_t SCREEN_WIDTH = 320;

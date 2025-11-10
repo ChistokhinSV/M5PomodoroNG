@@ -2,6 +2,8 @@
 #define TIMER_STATE_MACHINE_H
 
 #include "PomodoroSequence.h"
+#include "../hardware/ILEDController.h"
+#include "../hardware/IHapticController.h"
 #include <cstdint>
 #include <functional>
 #include <freertos/FreeRTOS.h>
@@ -76,6 +78,13 @@ public:
     void onTimeout(TimeoutCallback callback) { timeout_callback = callback; }
     void onAudioEvent(AudioCallback callback) { audio_callback = callback; }
 
+    // LED controller (MP-23)
+    void setLEDController(ILEDController* controller) { led_controller = controller; }
+    void indicateSessionReady();  // Show yellow flash when waiting for session start
+
+    // Haptic controller (MP-27)
+    void setHapticController(IHapticController* controller) { haptic_controller = controller; }
+
     // Reset to IDLE
     void reset();
 
@@ -89,6 +98,8 @@ private:
     StateCallback state_callback = nullptr;
     TimeoutCallback timeout_callback = nullptr;
     AudioCallback audio_callback = nullptr;
+    ILEDController* led_controller = nullptr;  // MP-23: LED control
+    IHapticController* haptic_controller = nullptr;  // MP-27: Haptic feedback
 
     // Thread-safety (MP-47)
     SemaphoreHandle_t state_mutex_;  // Protects all state variables above

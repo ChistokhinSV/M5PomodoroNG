@@ -16,6 +16,8 @@
 #include "hardware/LEDController.h"
 #include "hardware/IAudioPlayer.h"
 #include "hardware/AudioPlayer.h"
+#include "hardware/IHapticController.h"
+#include "hardware/HapticController.h"
 #include "tasks/UITask.h"
 #include "tasks/NetworkTask.h"
 
@@ -34,6 +36,7 @@ PomodoroSequence* g_sequence = nullptr;
 Statistics* g_statistics = nullptr;
 Config* g_config = nullptr;
 ILEDController* g_ledController = nullptr;
+IHapticController* g_hapticController = nullptr;
 
 // FreeRTOS task handles (for monitoring)
 TaskHandle_t g_uiTaskHandle = NULL;
@@ -73,6 +76,7 @@ void setup() {
     g_config = new Config();
     g_statistics = new Statistics();
     g_ledController = new LEDController();
+    g_hapticController = new HapticController(*g_config);
     g_audioPlayer = new AudioPlayer();
     g_sequence = new PomodoroSequence();
     g_stateMachine = new TimerStateMachine(*g_sequence);
@@ -105,6 +109,13 @@ void setup() {
         Serial.println("[OK] LED controller initialized");
     }
 
+    // Initialize haptic controller (MP-27)
+    if (!g_hapticController->begin()) {
+        Serial.println("[ERROR] Failed to initialize haptic controller");
+    } else {
+        Serial.println("[OK] Haptic controller initialized");
+    }
+
     // Initialize audio player
     if (!g_audioPlayer->begin()) {
         Serial.println("[ERROR] Failed to initialize audio player");
@@ -122,31 +133,16 @@ void setup() {
     // Initialize state machine and sequence
     auto pomodoro_config = g_config->getPomodoro();
 
-    // Detect mode based on config values (MP-50)
-    PomodoroSequence::Mode mode = PomodoroSequence::Mode::CLASSIC;
-    if (pomodoro_config.work_duration_min == 25 &&
-        pomodoro_config.short_break_min == 5 &&
-        pomodoro_config.long_break_min == 15 &&
-        pomodoro_config.sessions_before_long == 4) {
-        mode = PomodoroSequence::Mode::CLASSIC;
-        Serial.println("[Config] Using CLASSIC mode (25/5/15, 4 sessions)");
-    } else if (pomodoro_config.work_duration_min == 45 &&
-               pomodoro_config.short_break_min == 15 &&
-               pomodoro_config.long_break_min == 30 &&
-               pomodoro_config.sessions_before_long == 2) {
-        mode = PomodoroSequence::Mode::STUDY;
-        Serial.println("[Config] Using STUDY mode (45/15/30, 2 sessions)");
-    } else {
-        mode = PomodoroSequence::Mode::CUSTOM;
-        Serial.printf("[Config] Using CUSTOM mode (%d/%d/%d, %d sessions)\n",
-                     pomodoro_config.work_duration_min,
-                     pomodoro_config.short_break_min,
-                     pomodoro_config.long_break_min,
-                     pomodoro_config.sessions_before_long);
-    }
+    // Apply pomodoro settings to sequence
+    Serial.printf("[Config] Pomodoro: %d/%d/%d min, %d sessions/cycle, %d cycles\n",
+                 pomodoro_config.work_duration_min,
+                 pomodoro_config.short_break_min,
+                 pomodoro_config.long_break_min,
+                 pomodoro_config.sessions_before_long,
+                 pomodoro_config.num_cycles);
 
-    g_sequence->setMode(mode);
     g_sequence->setSessionsBeforeLong(pomodoro_config.sessions_before_long);
+    g_sequence->setNumCycles(pomodoro_config.num_cycles);
     g_sequence->setWorkDuration(pomodoro_config.work_duration_min);
     g_sequence->setShortBreakDuration(pomodoro_config.short_break_min);
     g_sequence->setLongBreakDuration(pomodoro_config.long_break_min);
@@ -165,6 +161,14 @@ void setup() {
         }
     });
     Serial.println("[OK] Audio callbacks registered");
+
+    // Connect LED controller to state machine (MP-23)
+    g_stateMachine->setLEDController(g_ledController);
+    Serial.println("[OK] LED controller connected to state machine");
+
+    // Connect haptic controller to state machine (MP-27)
+    g_stateMachine->setHapticController(g_hapticController);
+    Serial.println("[OK] Haptic controller connected to state machine");
 
     // Register timeout callback for auto-start logic
     g_stateMachine->onTimeout([]() {
@@ -187,12 +191,14 @@ void setup() {
         } else {
             Serial.printf("[Main] Session ready: %s (manual start required)\n",
                          session.type == PomodoroSequence::SessionType::WORK ? "WORK" : "BREAK");
+            // MP-23: Show yellow flash to indicate session is waiting for confirmation
+            g_stateMachine->indicateSessionReady();
         }
     });
     Serial.println("[OK] Timeout callback registered (auto-start support)");
 
     // Create ScreenManager (owns all 4 screens)
-    g_screenManager = new ScreenManager(*g_stateMachine, *g_sequence, *g_statistics, *g_config, *g_ledController);
+    g_screenManager = new ScreenManager(*g_stateMachine, *g_sequence, *g_statistics, *g_config, *g_ledController, *g_hapticController);
     Serial.println("[OK] ScreenManager initialized with 4 screens");
 
     // Note: M5Unified BtnA/B/C zones are fixed at y=240-320, cannot be adjusted

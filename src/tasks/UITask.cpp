@@ -33,6 +33,8 @@
 extern Renderer* g_renderer;
 extern ScreenManager* g_screenManager;
 extern IAudioPlayer* g_audioPlayer;
+extern ILEDController* g_ledController;
+extern IHapticController* g_hapticController;
 extern TimerStateMachine* g_stateMachine;
 extern PomodoroSequence* g_sequence;
 
@@ -83,6 +85,29 @@ void uiTask(void* parameter) {
 
             // Update audio player (track playing state)
             g_audioPlayer->update();
+
+            // Update LED controller (animate patterns - MP-23)
+            g_ledController->update();
+
+            // MP-27: If milestone ended and LED is OFF, refresh pattern based on timer state
+            if (g_ledController->getPattern() == ILEDController::Pattern::OFF) {
+                const char* state_name = g_stateMachine->getStateName();
+                if (strcmp(state_name, "ACTIVE") == 0) {
+                    // Refresh to session-based pattern (work=red, break=green)
+                    auto session_type = g_sequence->getCurrentSession().type;
+                    if (session_type == PomodoroSequence::SessionType::WORK) {
+                        g_ledController->setStatePattern(ILEDController::TimerState::WORK_ACTIVE);
+                    } else {
+                        g_ledController->setStatePattern(ILEDController::TimerState::BREAK_ACTIVE);
+                    }
+                } else if (strcmp(state_name, "PAUSED") == 0) {
+                    // PauseScreen handles this, but force refresh just in case
+                    g_ledController->setStatePattern(ILEDController::TimerState::PAUSED);
+                }
+            }
+
+            // Update haptic controller (state machine for rhythm patterns - MP-27)
+            g_hapticController->update();
 
             // Draw active screen
             g_screenManager->draw(*g_renderer);

@@ -2,21 +2,13 @@
 #include <Arduino.h>
 
 PomodoroSequence::PomodoroSequence()
-    : mode(Mode::CLASSIC),
-      current_session(1),
+    : current_session(1),
       completed_today(0),
       sequence_start_epoch(0),
       custom_work_min(25),
       custom_short_break_min(5),
       custom_long_break_min(15),
       custom_sessions_before_long(4) {
-}
-
-void PomodoroSequence::setMode(Mode new_mode) {
-    if (mode != new_mode) {
-        mode = new_mode;
-        reset();  // Reset sequence when mode changes
-    }
 }
 
 void PomodoroSequence::setWorkDuration(uint16_t minutes) {
@@ -33,6 +25,10 @@ void PomodoroSequence::setLongBreakDuration(uint16_t minutes) {
 
 void PomodoroSequence::setSessionsBeforeLong(uint8_t count) {
     custom_sessions_before_long = constrain(count, 2, 8);  // Reasonable limits
+}
+
+void PomodoroSequence::setNumCycles(uint8_t cycles) {
+    custom_num_cycles = constrain(cycles, 1, 4);  // Reasonable limits (1-4 cycles)
 }
 
 void PomodoroSequence::start() {
@@ -55,7 +51,7 @@ PomodoroSequence::Session PomodoroSequence::getCurrentSession() const {
 
 PomodoroSequence::Session PomodoroSequence::getNextSession() const {
     uint8_t next_session = current_session + 1;
-    uint8_t total = getTotalSessions();
+    uint8_t total = getTotalIntervals();
 
     // Wrap around after completing full cycle
     if (next_session > total) {
@@ -69,20 +65,72 @@ PomodoroSequence::Session PomodoroSequence::getNextSession() const {
     return session;
 }
 
-void PomodoroSequence::advance() {
-    uint8_t total = getTotalSessions();
+bool PomodoroSequence::advance() {
+    uint8_t total = getTotalIntervals();
     current_session++;
 
     // Wrap around to 1 after completing full cycle
+    bool cycle_completed = false;
     if (current_session > total) {
         current_session = 1;
+        completed_today++;
+        cycle_completed = true;
+        Serial.println("[PomodoroSequence] Cycle completed! Starting new cycle");
     }
+
+    return cycle_completed;
 }
 
-uint8_t PomodoroSequence::getTotalSessions() const {
-    // MP-50: Return saved value for all modes (Classic/Study/Custom)
-    // Mode presets ensure correct value: Classic=4, Study=2, Custom=user-defined
+// MP-51: New methods to distinguish work sessions from intervals
+
+uint8_t PomodoroSequence::getTotalWorkSessions() const {
+    return custom_sessions_before_long * custom_num_cycles;
+}
+
+uint8_t PomodoroSequence::getCurrentWorkSession() const {
+    // Count completed work sessions + 1 if currently in work session
+    uint8_t completed_work = 0;
+
+    // Count work sessions before current
+    for (uint8_t i = 1; i < current_session; i++) {
+        if (getSessionType(i) == SessionType::WORK) {
+            completed_work++;
+        }
+    }
+
+    // Add 1 if currently in work session
+    if (isWorkSession()) {
+        return completed_work + 1;
+    }
+
+    // If in break, return the last work session number
+    return completed_work > 0 ? completed_work : 1;
+}
+
+uint8_t PomodoroSequence::getSessionsBeforeLong() const {
     return custom_sessions_before_long;
+}
+
+bool PomodoroSequence::isNextLongBreak() const {
+    uint8_t next_session = current_session + 1;
+    uint8_t total = getTotalIntervals();
+
+    if (next_session > total) {
+        next_session = 1;  // Wrap around
+    }
+
+    return getSessionType(next_session) == SessionType::LONG_BREAK;
+}
+
+uint8_t PomodoroSequence::getTotalIntervals() const {
+    // Each cycle: sessions × 2 intervals (work + break)
+    // Total: cycles × sessions × 2
+    return custom_sessions_before_long * 2 * custom_num_cycles;
+}
+
+// Legacy method (for compatibility during refactor)
+uint8_t PomodoroSequence::getTotalSessions() const {
+    return getTotalIntervals();
 }
 
 bool PomodoroSequence::isWorkSession() const {
@@ -106,22 +154,19 @@ uint32_t PomodoroSequence::serialize() const {
     // Pack into 32 bits:
     // [7:0]   = current_session (8 bits)
     // [15:8]  = completed_today (8 bits)
-    // [17:16] = mode (2 bits)
-    // [31:18] = reserved (14 bits)
+    // [31:16] = reserved (16 bits)
     uint32_t data = 0;
     data |= (current_session & 0xFF);
     data |= ((completed_today & 0xFF) << 8);
-    data |= ((static_cast<uint8_t>(mode) & 0x03) << 16);
     return data;
 }
 
 void PomodoroSequence::deserialize(uint32_t data) {
     current_session = data & 0xFF;
     completed_today = (data >> 8) & 0xFF;
-    mode = static_cast<Mode>((data >> 16) & 0x03);
 
     // Validate and constrain
-    if (current_session < 1 || current_session > getTotalSessions()) {
+    if (current_session < 1 || current_session > getTotalIntervals()) {
         current_session = 1;
     }
 }
@@ -129,31 +174,23 @@ void PomodoroSequence::deserialize(uint32_t data) {
 // Private methods
 
 PomodoroSequence::SessionType PomodoroSequence::getSessionType(uint8_t session_num) const {
-    switch (mode) {
-        case Mode::CLASSIC:
-            // Pattern: W B W B W B W LB (1-8)
-            if (session_num == 8) return SessionType::LONG_BREAK;
-            if (session_num % 2 == 0) return SessionType::SHORT_BREAK;
-            return SessionType::WORK;
+    // Settings-based logic: uses only custom_sessions_before_long
+    // Pattern repeats every cycle: W-B-W-B-...-W-LB
+    // Example (4 sessions/cycle): W B W B W B W LB | W B W B W B W LB ...
+    uint8_t intervals_per_cycle = custom_sessions_before_long * 2;
 
-        case Mode::STUDY:
-            // Pattern: W B W B ... (alternating)
-            return (session_num % 2 == 1) ? SessionType::WORK : SessionType::LONG_BREAK;
-
-        case Mode::CUSTOM:
-            // Similar to CLASSIC but with custom session count
-            {
-                uint8_t total_work_sessions = custom_sessions_before_long;
-                uint8_t last_session = total_work_sessions * 2;
-
-                if (session_num == last_session) return SessionType::LONG_BREAK;
-                if (session_num % 2 == 0) return SessionType::SHORT_BREAK;
-                return SessionType::WORK;
-            }
-
-        default:
-            return SessionType::WORK;
+    // Long break at end of each cycle (sessions 4, 8, 12, etc.)
+    if (session_num % intervals_per_cycle == 0) {
+        return SessionType::LONG_BREAK;
     }
+
+    // Short break on even intervals (but not long breaks)
+    if (session_num % 2 == 0) {
+        return SessionType::SHORT_BREAK;
+    }
+
+    // Work on odd intervals
+    return SessionType::WORK;
 }
 
 uint16_t PomodoroSequence::getSessionDuration(SessionType type) const {

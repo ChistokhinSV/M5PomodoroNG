@@ -72,17 +72,59 @@ bool TimerStateMachine::handleEvent(Event event) {
                     sequence.incrementCompletedToday();
                 }
 
+                // MP-51: Celebrate BEFORE advancing to long break (supports Study mode's 2 long breaks)
+                bool entering_long_break = sequence.isNextLongBreak();
+
+                // DEBUG: Log confetti trigger detection
+                auto current_sess = sequence.getCurrentSession();
+                Serial.printf("[TIMEOUT DEBUG] Current session: %d, Entering long break: %s\n",
+                             current_sess.number, entering_long_break ? "YES" : "NO");
+
                 // Auto-advance to next session
-                sequence.advance();
+                bool cycle_completed = sequence.advance();
+
+                // DEBUG: Log cycle completion
+                auto next_sess = sequence.getCurrentSession();
+                Serial.printf("[TIMEOUT DEBUG] Cycle completed: %s, Next session: %d (%s)\n",
+                             cycle_completed ? "YES" : "NO",
+                             next_sess.number,
+                             next_sess.type == PomodoroSequence::SessionType::WORK ? "WORK" :
+                             next_sess.type == PomodoroSequence::SessionType::SHORT_BREAK ? "SHORT_BREAK" : "LONG_BREAK");
+
+                // MP-27: Trigger celebratory haptic on cycle completion
+                if (cycle_completed && haptic_controller) {
+                    haptic_controller->trigger(IHapticController::Pattern::CYCLE_COMPLETE);
+                    Serial.println("[TimerStateMachine] Cycle complete! Triggering celebratory haptic");
+                }
+
+                // MP-27: Trigger haptic feedback on timer complete
+                if (haptic_controller) {
+                    haptic_controller->trigger(IHapticController::Pattern::TIMER_COMPLETE);
+                }
+
+                // Trigger confetti if we're entering a long break
+                if (led_controller && entering_long_break) {
+                    // Trigger 10-second confetti celebration
+                    // When it ends, the current state (ACTIVE/long break) will set green pulse
+                    led_controller->triggerMilestone(10000);
+                    Serial.println("[StateMachine] Entering long break! Confetti celebration (10s)");
+                }
 
                 // Return to IDLE
                 stopTimer();
                 bool transitioned = transition(State::IDLE);
 
+                // Release mutex BEFORE calling timeout callback to avoid nested lock
+                // The callback may call handleEvent(START) which needs to acquire the mutex
+                guard.unlock();
+
                 // Trigger timeout callback AFTER transitioning to IDLE
                 // This allows the callback to check the new session and auto-start if configured
-                if (transitioned && timeout_callback) {
+                // Skip auto-start if cycle completed - require manual start for new cycle
+                if (transitioned && timeout_callback && !cycle_completed) {
                     timeout_callback();
+                } else if (cycle_completed) {
+                    Serial.println("[StateMachine] Cycle completed - staying at IDLE (manual start required)");
                 }
 
                 return transitioned;
@@ -188,6 +230,15 @@ void TimerStateMachine::reset() {
     transition(State::IDLE);
 }
 
+void TimerStateMachine::indicateSessionReady() {
+    // Show yellow flash when waiting for user to start next session
+    // Called by timeout callback when auto-start is disabled
+    if (led_controller && state == State::IDLE) {
+        led_controller->setStatePattern(ILEDController::TimerState::WARNING);
+        Serial.println("[StateMachine] Session ready indicator: YELLOW FLASH");
+    }
+}
+
 // Private methods
 
 bool TimerStateMachine::transition(State new_state) {
@@ -197,17 +248,20 @@ bool TimerStateMachine::transition(State new_state) {
 
     State old_state = state;
 
-    // Store old state name BEFORE transition
+    // Store state names WITHOUT calling getStateName() (avoids nested mutex lock)
     const char* old_name = (old_state == State::IDLE) ? "IDLE" :
                            (old_state == State::ACTIVE) ? "ACTIVE" :
                            (old_state == State::PAUSED) ? "PAUSED" : "UNKNOWN";
+
+    const char* new_name = (new_state == State::IDLE) ? "IDLE" :
+                           (new_state == State::ACTIVE) ? "ACTIVE" :
+                           (new_state == State::PAUSED) ? "PAUSED" : "UNKNOWN";
 
     exitState(old_state);
     state = new_state;
     enterState(new_state);
 
-    Serial.printf("[StateMachine] Transition: %s -> %s\n",
-                  old_name, getStateName());
+    Serial.printf("[StateMachine] Transition: %s -> %s\n", old_name, new_name);
 
     if (state_callback) {
         state_callback(old_state, new_state);
@@ -242,6 +296,11 @@ void TimerStateMachine::enterState(State new_state) {
         case State::IDLE:
             remaining_ms = 0;
             total_ms = 0;
+
+            // MP-23: Turn off LEDs when idle
+            if (led_controller) {
+                led_controller->setStatePattern(ILEDController::TimerState::IDLE);
+            }
             break;
 
         case State::ACTIVE:
@@ -249,6 +308,17 @@ void TimerStateMachine::enterState(State new_state) {
 
             // Reset warning flag for new session
             warning_played = false;
+
+            // MP-23: Set LED pattern based on session type
+            if (led_controller) {
+                auto session_type = sequence.getCurrentSession().type;
+                if (session_type == PomodoroSequence::SessionType::WORK) {
+                    led_controller->setStatePattern(ILEDController::TimerState::WORK_ACTIVE);
+                } else {
+                    // Both short and long breaks use BREAK_ACTIVE (green pulse)
+                    led_controller->setStatePattern(ILEDController::TimerState::BREAK_ACTIVE);
+                }
+            }
 
             // Trigger audio based on session type
             if (audio_callback) {
@@ -265,6 +335,7 @@ void TimerStateMachine::enterState(State new_state) {
 
         case State::PAUSED:
             // Keep remaining_ms intact
+            // Note: PauseScreen overrides LED pattern with RED BLINK
             break;
     }
 }

@@ -74,13 +74,12 @@ int16_t HMIController::getEncoderDelta() {
 }
 
 void HMIController::hapticFeedback(uint8_t strength, uint16_t duration_ms) {
-    // M5Stack Core2 has vibration motor
-    // Placeholder: Actual implementation would control motor via GPIO/I2C
-
-    Serial.printf("[HMIController] Haptic: strength=%d, duration=%dms\n",
-                  strength, duration_ms);
-
-    // Note: M5.Power.setVibration() might be available depending on hardware
+    // MP-27: Use injected haptic controller instead of placeholder
+    if (haptic_controller) {
+        haptic_controller->trigger(IHapticController::Pattern::BUTTON_PRESS);
+    } else {
+        Serial.println("[HMIController] WARNING: No haptic controller set");
+    }
 }
 
 // Private methods

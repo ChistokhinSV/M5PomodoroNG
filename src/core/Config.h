@@ -20,7 +20,8 @@ public:
         uint16_t work_duration_min = 25;       // Classic: 25min
         uint16_t short_break_min = 5;          // Classic: 5min
         uint16_t long_break_min = 15;          // Classic: 15min
-        uint8_t sessions_before_long = 4;      // Classic: 4 sessions
+        uint8_t sessions_before_long = 4;      // Sessions per cycle (Classic: 4, Study: 2)
+        uint8_t num_cycles = 1;                // Number of cycles (Classic: 1, Study: 2)
         bool auto_start_breaks = true;
         bool auto_start_work = false;
 

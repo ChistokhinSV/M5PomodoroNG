@@ -2,6 +2,7 @@
 #define MAINSCREEN_H
 
 #include <functional>
+#include "../Screen.h"
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/ProgressBar.h"
@@ -41,27 +42,23 @@ using NavigationCallback = std::function<void(ScreenID)>;
  * - State-based button visibility
  * - Today's completion count badge
  */
-class MainScreen {
+class MainScreen : public Screen {
 public:
     MainScreen(TimerStateMachine& state_machine,
                PomodoroSequence& sequence,
                NavigationCallback navigate_callback);
 
-    // Lifecycle
-    void draw(Renderer& renderer);
-    void update(uint32_t deltaMs);
-    void handleTouch(int16_t x, int16_t y, bool pressed);
+    // Override Screen interface
+    void draw(Renderer& renderer) override;
+    void update(uint32_t deltaMs) override;
+    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) override;
+    void onButtonA() override;  // Start/Pause
+    void onButtonB() override;  // Stats
+    void onButtonC() override;  // Settings
 
-    // Configuration
+    // Screen-specific methods
     void setTaskName(const char* task);
-    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
-    void markDirty() { needs_redraw_ = true; }
-
-    // Hardware button interface
-    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC);
-    void onButtonA();  // Start/Pause
-    void onButtonB();  // Stats
-    void onButtonC();  // Settings
 
 private:
     TimerStateMachine& state_machine_;
@@ -77,8 +74,8 @@ private:
     // State
     char task_name_[64];
     uint32_t last_update_ms_;
-    bool needs_redraw_;
     int16_t TIMER_HEIGHT;
+    // Note: needs_redraw_ inherited from Screen base class
 
     #define SMALL_FONT fonts::Font2
     #define TIMER_FONT fonts::Font8

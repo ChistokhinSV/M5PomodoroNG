@@ -3,6 +3,7 @@
 
 #include <M5Unified.h>
 #include <cstdint>
+#include "IHapticController.h"
 
 /**
  * HMI (Human-Machine Interface) controller for encoder + buttons
@@ -67,7 +68,10 @@ public:
     EncoderState getEncoder() const { return encoder; }
     int16_t getEncoderDelta();           // Get & reset delta
 
-    // Haptic feedback (via vibration motor)
+    // Haptic controller (MP-27)
+    void setHapticController(IHapticController* controller) { haptic_controller = controller; }
+
+    // Haptic feedback (via vibration motor) - DEPRECATED, use setHapticController() instead
     void hapticFeedback(uint8_t strength = 50, uint16_t duration_ms = 50);
 
 private:
@@ -82,6 +86,7 @@ private:
     ButtonInfo buttons[4];  // A, B, C, Encoder
     bool encoder_available = false;
     EncoderState encoder = {0, 0, false};
+    IHapticController* haptic_controller = nullptr;  // MP-27: Haptic feedback
 
     // I2C HMI unit address (if connected)
     static constexpr uint8_t HMI_I2C_ADDR = 0x5F;

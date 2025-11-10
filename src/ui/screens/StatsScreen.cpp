@@ -5,8 +5,8 @@
 
 StatsScreen::StatsScreen(Statistics& statistics, NavigationCallback navigate_callback)
     : statistics_(statistics),
-      navigate_callback_(navigate_callback),
-      needs_redraw_(true) {
+      navigate_callback_(navigate_callback) {
+    // Note: needs_redraw_ inherited from Screen base class
 
     // Configure widgets with layout positions
     // Status bar at top (320×20)
@@ -81,10 +81,7 @@ void StatsScreen::draw(Renderer& renderer) {
     needs_redraw_ = false;
 }
 
-void StatsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    // Touch handling removed - now uses hardware buttons
-    // Hardware button handling done by ScreenManager via onButtonA/B/C()
-}
+// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
 
 void StatsScreen::drawTitle(Renderer& renderer) {
     // Draw "Statistics" title centered

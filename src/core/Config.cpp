@@ -51,6 +51,7 @@ bool Config::load() {
     pomodoro.short_break_min = prefs.getUShort("pom_short", 5);
     pomodoro.long_break_min = prefs.getUShort("pom_long", 15);
     pomodoro.sessions_before_long = prefs.getUChar("pom_sessions", 4);
+    pomodoro.num_cycles = prefs.getUChar("pom_cycles", 1);
     pomodoro.auto_start_breaks = prefs.getBool("pom_auto_brk", true);
     pomodoro.auto_start_work = prefs.getBool("pom_auto_wrk", false);
     pomodoro.custom_work_min = prefs.getUShort("pom_cust_w", 15);
@@ -101,6 +102,7 @@ bool Config::save() {
     prefs.putUShort("pom_short", pomodoro.short_break_min);
     prefs.putUShort("pom_long", pomodoro.long_break_min);
     prefs.putUChar("pom_sessions", pomodoro.sessions_before_long);
+    prefs.putUChar("pom_cycles", pomodoro.num_cycles);
     prefs.putBool("pom_auto_brk", pomodoro.auto_start_breaks);
     prefs.putBool("pom_auto_wrk", pomodoro.auto_start_work);
     prefs.putUShort("pom_cust_w", pomodoro.custom_work_min);

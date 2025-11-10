@@ -1,4 +1,5 @@
 #include "PauseScreen.h"
+#include "../../hardware/LEDController.h"
 #include <M5Unified.h>
 #include <stdio.h>
 
@@ -8,7 +9,8 @@ PauseScreen::PauseScreen(TimerStateMachine& state_machine,
     : state_machine_(state_machine),
       led_controller_(led_controller),
       navigate_callback_(navigate_callback),
-      needs_redraw_(true) {
+      led_pattern_set_(false) {
+    // Note: needs_redraw_ inherited from Screen base class
 
     // Configure widgets with layout positions
     // Status bar at top (320×20)
@@ -28,9 +30,11 @@ void PauseScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
 }
 
 void PauseScreen::update(uint32_t deltaMs) {
-    // Set LED to pulsing amber
-    led_controller_.setPattern(ILEDController::Pattern::PULSE,
-                               ILEDController::Color::Orange());  // Amber/Orange
+    // Set LED pattern using state-based mapping (only once to avoid resetting animation)
+    if (!led_pattern_set_) {
+        led_controller_.setStatePattern(ILEDController::TimerState::PAUSED);
+        led_pattern_set_ = true;
+    }
 
     // Update widgets
     status_bar_.update(deltaMs);
@@ -58,10 +62,7 @@ void PauseScreen::draw(Renderer& renderer) {
     needs_redraw_ = false;
 }
 
-void PauseScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
-    // Touch handling removed - now uses hardware buttons
-    // Hardware button handling done by ScreenManager via onButtonA/C()
-}
+// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
 
 void PauseScreen::drawPausedText(Renderer& renderer) {
     // Draw large "PAUSED" text centered in amber
@@ -93,9 +94,10 @@ void PauseScreen::getButtonLabels(const char*& btnA, const char*& btnB, const ch
 }
 
 void PauseScreen::onButtonA() {
-    // Resume timer
+    // Resume timer (state machine handles LED pattern)
     Serial.println("[PauseScreen] BtnA: Resume timer");
     state_machine_.handleEvent(TimerStateMachine::Event::RESUME);
+    led_pattern_set_ = false;  // Reset for next pause
     needs_redraw_ = true;
 }
 
@@ -104,8 +106,9 @@ void PauseScreen::onButtonB() {
 }
 
 void PauseScreen::onButtonC() {
-    // Stop timer
+    // Stop timer (state machine handles LED pattern)
     Serial.println("[PauseScreen] BtnC: Stop timer");
     state_machine_.handleEvent(TimerStateMachine::Event::STOP);
+    led_pattern_set_ = false;  // Reset for next pause
     needs_redraw_ = true;
 }

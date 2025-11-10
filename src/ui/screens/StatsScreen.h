@@ -2,6 +2,7 @@
 #define STATSSCREEN_H
 
 #include <functional>
+#include "../Screen.h"
 #include "../Renderer.h"
 #include "../widgets/StatusBar.h"
 #include "../widgets/StatsChart.h"
@@ -39,24 +40,18 @@ using NavigationCallback = std::function<void(ScreenID)>;
  * - Lifetime total and 7-day average
  * - Back button to return to main screen
  */
-class StatsScreen {
+class StatsScreen : public Screen {
 public:
     StatsScreen(Statistics& statistics, NavigationCallback navigate_callback);
 
-    // Lifecycle
-    void draw(Renderer& renderer);
-    void update(uint32_t deltaMs);
-    void handleTouch(int16_t x, int16_t y, bool pressed);
-
-    // Configuration
-    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute);
-    void markDirty() { needs_redraw_ = true; }
-
-    // Hardware button interface
-    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC);
-    void onButtonA();  // Back to Main
-    void onButtonB();  // (unused)
-    void onButtonC();  // (unused)
+    // Override Screen interface
+    void draw(Renderer& renderer) override;
+    void update(uint32_t deltaMs) override;
+    void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
+    void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) override;
+    void onButtonA() override;  // Back to Main
+    void onButtonB() override;  // (unused)
+    void onButtonC() override;  // (unused)
 
 private:
     Statistics& statistics_;
@@ -66,9 +61,7 @@ private:
     StatusBar status_bar_;
     StatsChart stats_chart_;
     // Note: Back button removed, now using hardware button
-
-    // State
-    bool needs_redraw_;
+    // Note: needs_redraw_ inherited from Screen base class
 
     // Layout constants
     static constexpr int16_t SCREEN_WIDTH = 320;
