@@ -1,8 +1,10 @@
 #include "UITask.h"
 #include <M5Unified.h>
+#include <WiFi.h>
 #include "../ui/Renderer.h"
 #include "../ui/ScreenManager.h"
 #include "../hardware/IAudioPlayer.h"
+#include "../core/TimeManager.h"
 
 /**
  * UI Task (Core 0 - Protocol CPU)
@@ -37,14 +39,13 @@ extern ILEDController* g_ledController;
 extern IHapticController* g_hapticController;
 extern TimerStateMachine* g_stateMachine;
 extern PomodoroSequence* g_sequence;
+extern TimeManager* g_timeManager;
 
 // Task timing
 static uint32_t g_lastUpdate = 0;
 static uint32_t g_lastSecond = 0;
 static uint32_t g_lastTaskMonitor = 0;  // MP-47: Task monitoring
 static uint8_t g_last_valid_battery = 100;
-static uint8_t g_hour = 10;
-static uint8_t g_minute = 45;
 
 void uiTask(void* parameter) {
     Serial.println("[UITask] Starting on Core 0...");
@@ -132,11 +133,22 @@ void uiTask(void* parameter) {
 
             bool charging = M5.Power.isCharging();
 
-            // Increment mock time (will use NTP/RTC later)
-            g_minute++;
-            if (g_minute >= 60) {
-                g_minute = 0;
-                g_hour = (g_hour + 1) % 24;
+            // Get actual time from TimeManager (RTC + NTP)
+            uint8_t hour = 0, minute = 0;
+            if (g_timeManager) {
+                struct tm timeinfo;
+                g_timeManager->getLocalTime(timeinfo);
+                hour = timeinfo.tm_hour;
+                minute = timeinfo.tm_min;
+            }
+
+            // Check WiFi status - show connected if:
+            // 1. WiFi currently connected, OR
+            // 2. TimeManager was synced via NTP (time is accurate even if WiFi disconnected)
+            bool wifi_status = (WiFi.status() == WL_CONNECTED);
+            if (!wifi_status && g_timeManager && g_timeManager->isTimeSynced()) {
+                // Show WiFi icon if time was synced (even if disconnected now)
+                wifi_status = true;
             }
 
             // Get current mode string
@@ -148,7 +160,7 @@ void uiTask(void* parameter) {
                 mode = "PAUSED";
             }
 
-            g_screenManager->updateStatus(battery, charging, false, mode, g_hour, g_minute);
+            g_screenManager->updateStatus(battery, charging, wifi_status, mode, hour, minute);
         }
 
         // Task monitoring (MP-47): Print task statistics every 30 seconds
