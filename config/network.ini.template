@@ -1,0 +1,76 @@
+# M5 Pomodoro v2 - Network Configuration Template
+#
+# Copy this file to your SD card as: /config/network.ini
+# DO NOT commit the real network.ini with credentials to Git!
+#
+# This file is in INI format with sections and key=value pairs.
+# Lines starting with # or ; are comments.
+
+[WiFi]
+# Primary WiFi network credentials
+SSID=YourWiFiSSID
+Password=YourWiFiPassword
+
+# Optional fallback network (if primary unavailable)
+#SSID_Fallback=MobileHotspot
+#Password_Fallback=FallbackPassword
+
+[MQTT]
+# AWS IoT Core endpoint
+# Find at: AWS Console > IoT Core > Settings > Device data endpoint
+# Format: xxxxxxxxxxxxx-ats.iot.region.amazonaws.com
+Broker=your-endpoint-ats.iot.us-east-1.amazonaws.com
+Port=8883
+
+# MQTT client ID (must be unique per device)
+# Recommendation: m5-pomodoro-<last 6 hex digits of MAC address>
+# Example: m5-pomodoro-A1B2C3
+ClientID=m5-pomodoro-XXXXXX
+
+# MQTT keep-alive interval in seconds
+KeepAlive=60
+
+[Certificates]
+# SSL/TLS certificate file paths (relative to SD card root)
+# These files must exist on the SD card for secure MQTT connection
+RootCA=/config/certs/AmazonRootCA1.pem
+DeviceCert=/config/certs/device-certificate.pem.crt
+PrivateKey=/config/certs/device-private.pem.key
+
+# See config/certs/README.md for certificate setup instructions
+
+[CloudSync]
+# Enable or disable AWS IoT Device Shadow synchronization
+Enabled=true
+
+# Sync interval in minutes (how often to push statistics to cloud)
+# Recommendation: 5 minutes for performance mode, 10-30 for battery saver
+SyncIntervalMin=5
+
+[NTP]
+# NTP server for time synchronization
+# Used to update M5.Rtc (BM8563) when WiFi connects
+Server=pool.ntp.org
+
+# Timezone offset in seconds from UTC
+# Examples:
+#   0 = UTC
+#   3600 = UTC+1 (CET)
+#   -18000 = UTC-5 (EST)
+#   -28800 = UTC-8 (PST)
+TimezoneOffset=0
+
+# ============================================================================
+# Phase 3 Features (Future) - Not Yet Implemented
+# ============================================================================
+
+[Toggl]
+# Toggl time tracking integration (Phase 3)
+Enabled=false
+#APIToken=your_toggl_api_token_here
+
+[GoogleCalendar]
+# Google Calendar integration (Phase 3)
+Enabled=false
+#ClientID=your_google_client_id
+#ClientSecret=your_google_client_secret

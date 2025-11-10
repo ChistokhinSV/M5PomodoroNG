@@ -8,10 +8,12 @@
 #include "ui/Renderer.h"
 #include "ui/ScreenManager.h"
 #include "core/Config.h"
+#include "core/NetworkConfig.h"
 #include "core/TimerStateMachine.h"
 #include "core/PomodoroSequence.h"
 #include "core/Statistics.h"
 #include "core/SyncPrimitives.h"
+#include "hardware/SDManager.h"
 #include "hardware/ILEDController.h"
 #include "hardware/LEDController.h"
 #include "hardware/IAudioPlayer.h"
@@ -24,6 +26,12 @@
 // ============================================================================
 // Global Pointers (accessed by FreeRTOS tasks)
 // ============================================================================
+
+// Hardware components
+SDManager* g_sdManager = nullptr;
+
+// Network configuration (loaded from SD card)
+NetworkConfig* g_networkConfig = nullptr;
 
 // UI components (accessed by UITask on Core 0)
 Renderer* g_renderer = nullptr;
@@ -71,6 +79,36 @@ void setup() {
     }
     Serial.println("[OK] FreeRTOS synchronization primitives initialized");
 
+    // Initialize SD card (MP-70)
+    g_sdManager = new SDManager();
+    if (g_sdManager->begin()) {
+        Serial.printf("[OK] SD card initialized: %s, %u MB free\n",
+                     g_sdManager->getCardType().c_str(),
+                     g_sdManager->getFreeMB());
+    } else {
+        Serial.println("[WARN] SD card not available - using NVS/FLASH fallbacks");
+    }
+
+    // Initialize network configuration from SD card (MP-73)
+    if (g_sdManager->isMounted()) {
+        g_networkConfig = new NetworkConfig(*g_sdManager);
+        if (g_networkConfig->load()) {
+            Serial.println("[OK] Network configuration loaded from SD");
+
+            // Try to load SSL certificates (MP-74)
+            if (g_networkConfig->loadCertificates()) {
+                Serial.println("[OK] SSL certificates loaded");
+            } else {
+                Serial.println("[WARN] SSL certificates not available - TLS connections disabled");
+            }
+        } else {
+            Serial.println("[WARN] Failed to load network.ini - cloud sync disabled");
+            Serial.println("[INFO] Copy config/network.ini.template to SD:/config/network.ini");
+        }
+    } else {
+        Serial.println("[INFO] SD card not available - operating in offline mode");
+    }
+
     // Allocate core components
     g_renderer = new Renderer();
     g_config = new Config();
@@ -116,8 +154,9 @@ void setup() {
         Serial.println("[OK] Haptic controller initialized");
     }
 
-    // Initialize audio player
-    if (!g_audioPlayer->begin()) {
+    // Initialize audio player (MP-71: SD audio with FLASH fallback)
+    AudioPlayer* audioPlayer = static_cast<AudioPlayer*>(g_audioPlayer);
+    if (!audioPlayer->begin(g_sdManager, AudioPlayer::AudioSource::AUTO)) {
         Serial.println("[ERROR] Failed to initialize audio player");
     } else {
         Serial.println("[OK] Audio player initialized");
