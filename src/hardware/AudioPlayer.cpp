@@ -260,38 +260,54 @@ bool AudioPlayer::loadAudioFromSD() {
     // Free any existing buffers
     freeSDBuffers();
 
-    // Load all 4 WAV files
-    bool success = true;
+    // Load all 4 WAV files (partial loading supported)
+    // If a file is missing, we'll use FLASH fallback for that sound
+    int loaded_count = 0;
+    size_t total_bytes = 0;
 
-    if (!loadWavFromSD("/audio/work_start.wav", &sd_wav_work_start, &sd_wav_work_start_len)) {
-        Serial.println("[AudioPlayer] Failed to load work_start.wav");
-        success = false;
+    if (loadWavFromSD("/audio/work_start.wav", &sd_wav_work_start, &sd_wav_work_start_len)) {
+        loaded_count++;
+        total_bytes += sd_wav_work_start_len;
+        Serial.printf("[AudioPlayer] Loaded work_start.wav (%d bytes)\n", sd_wav_work_start_len);
+    } else {
+        Serial.println("[AudioPlayer] work_start.wav not found - using FLASH fallback");
     }
 
-    if (!loadWavFromSD("/audio/rest_start.wav", &sd_wav_rest_start, &sd_wav_rest_start_len)) {
-        Serial.println("[AudioPlayer] Failed to load rest_start.wav");
-        success = false;
+    if (loadWavFromSD("/audio/rest_start.wav", &sd_wav_rest_start, &sd_wav_rest_start_len)) {
+        loaded_count++;
+        total_bytes += sd_wav_rest_start_len;
+        Serial.printf("[AudioPlayer] Loaded rest_start.wav (%d bytes)\n", sd_wav_rest_start_len);
+    } else {
+        Serial.println("[AudioPlayer] rest_start.wav not found - using FLASH fallback");
     }
 
-    if (!loadWavFromSD("/audio/long_rest_start.wav", &sd_wav_long_rest_start, &sd_wav_long_rest_start_len)) {
-        Serial.println("[AudioPlayer] Failed to load long_rest_start.wav");
-        success = false;
+    if (loadWavFromSD("/audio/long_rest_start.wav", &sd_wav_long_rest_start, &sd_wav_long_rest_start_len)) {
+        loaded_count++;
+        total_bytes += sd_wav_long_rest_start_len;
+        Serial.printf("[AudioPlayer] Loaded long_rest_start.wav (%d bytes)\n", sd_wav_long_rest_start_len);
+    } else {
+        Serial.println("[AudioPlayer] long_rest_start.wav not found - using FLASH fallback");
     }
 
-    if (!loadWavFromSD("/audio/warning.wav", &sd_wav_warning, &sd_wav_warning_len)) {
-        Serial.println("[AudioPlayer] Failed to load warning.wav");
-        success = false;
+    if (loadWavFromSD("/audio/warning.wav", &sd_wav_warning, &sd_wav_warning_len)) {
+        loaded_count++;
+        total_bytes += sd_wav_warning_len;
+        Serial.printf("[AudioPlayer] Loaded warning.wav (%d bytes)\n", sd_wav_warning_len);
+    } else {
+        Serial.println("[AudioPlayer] warning.wav not found - using FLASH fallback");
     }
 
-    if (!success) {
-        // If any file failed, free all buffers and report failure
-        freeSDBuffers();
+    if (loaded_count == 0) {
+        // No files loaded - complete fallback to FLASH
+        Serial.println("[AudioPlayer] No audio files loaded from SD");
         return false;
     }
 
-    Serial.printf("[AudioPlayer] Loaded %d audio files from SD (total: %d bytes)\n",
-                  4, sd_wav_work_start_len + sd_wav_rest_start_len +
-                     sd_wav_long_rest_start_len + sd_wav_warning_len);
+    // Partial or complete success
+    Serial.printf("[AudioPlayer] Loaded %d of 4 audio files from SD (total: %d bytes)\n",
+                  loaded_count, total_bytes);
+    Serial.printf("[AudioPlayer] Using hybrid: SD (%d files) + FLASH (%d files)\n",
+                  loaded_count, 4 - loaded_count);
 
     return true;
 }
