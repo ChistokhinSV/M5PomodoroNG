@@ -1,0 +1,22 @@
+# Emergency Time Fallback
+#
+# This file is AUTO-CREATED by the device to store the last known time
+# Used as emergency fallback if M5.Rtc (BM8563) loses power and time becomes invalid
+#
+# DO NOT manually edit this file unless recovering from complete time loss
+#
+# Format: Unix timestamp (seconds since 1970-01-01 00:00:00 UTC)
+# Example: 1735689600 = 2025-01-01 00:00:00 UTC
+#
+# Time Source Priority:
+# 1. M5.Rtc (BM8563) - Primary source with backup battery
+# 2. NTP sync - Updates RTC when WiFi available
+# 3. This file - Emergency fallback if RTC invalid (year < 2020)
+# 4. Default (2025-01-01) - Last resort
+#
+# This file will be automatically created on first boot with valid time.
+# If you need to manually set the time, enter a Unix timestamp below:
+#
+# You can get current Unix timestamp from: https://www.unixtimestamp.com/
+#
+# Device will read this file ONLY if M5.Rtc time is invalid (year < 2020)
