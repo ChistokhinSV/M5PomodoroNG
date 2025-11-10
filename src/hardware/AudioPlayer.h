@@ -2,6 +2,7 @@
 #define AUDIO_PLAYER_H
 
 #include "IAudioPlayer.h"
+#include "SDManager.h"
 #include <M5Unified.h>
 #include <cstdint>
 
@@ -21,7 +22,7 @@ extern const uint32_t wav_warning_len;
  * Implements IAudioPlayer interface for hardware abstraction (MP-49)
  *
  * Features:
- * - WAV file playback from PROGMEM (embedded in firmware)
+ * - WAV file playback from SD card (primary) or PROGMEM (fallback)
  * - Volume control (0-100%)
  * - Sound effects (beep tones)
  * - Non-blocking playback
@@ -32,7 +33,11 @@ extern const uint32_t wav_warning_len;
  * - Bit Depth: 16-bit signed PCM
  * - Power: AXP192 controlled (GPIO enable)
  *
- * Embedded Sounds (PROGMEM):
+ * Audio Sources (MP-71):
+ * - PRIMARY: SD card /audio/*.wav files (loaded to PSRAM)
+ * - FALLBACK: PROGMEM embedded WAV data (always available)
+ *
+ * Sounds:
  * - WORK_START - Work session beginning (ascending tones)
  * - REST_START - Short break beginning (descending tones)
  * - LONG_REST_START - Long break beginning (long descending sequence)
@@ -40,10 +45,18 @@ extern const uint32_t wav_warning_len;
  */
 class AudioPlayer : public IAudioPlayer {
 public:
+    enum class AudioSource {
+        FLASH,      // Embedded in firmware flash (fallback)
+        SD_CARD,    // Loaded from SD card (preferred)
+        AUTO        // Try SD first, fallback to FLASH
+    };
+
     AudioPlayer();
+    ~AudioPlayer();
 
     // Initialization
-    bool begin() override;
+    bool begin() override;  // Uses AUTO mode (SD fallback to PROGMEM)
+    bool begin(SDManager* sd_manager, AudioSource source = AudioSource::AUTO);
 
     // Playback control
     void play(Sound sound) override;
@@ -69,12 +82,34 @@ public:
     // Must call every loop iteration
     void update() override;
 
+    // Audio source management (MP-71)
+    AudioSource getAudioSource() const { return current_source; }
+    bool isSDCardAudioAvailable() const { return sd_audio_loaded; }
+
 private:
     uint8_t current_volume = 70;  // 0-100%
     bool muted = false;
     bool playing = false;
 
+    // SD card support (MP-71)
+    SDManager* sd_manager = nullptr;
+    AudioSource current_source = AudioSource::FLASH;
+    bool sd_audio_loaded = false;
+
+    // SD audio buffers (allocated in PSRAM)
+    uint8_t* sd_wav_work_start = nullptr;
+    size_t sd_wav_work_start_len = 0;
+    uint8_t* sd_wav_rest_start = nullptr;
+    size_t sd_wav_rest_start_len = 0;
+    uint8_t* sd_wav_long_rest_start = nullptr;
+    size_t sd_wav_long_rest_start_len = 0;
+    uint8_t* sd_wav_warning = nullptr;
+    size_t sd_wav_warning_len = 0;
+
     // Internal methods
+    bool loadAudioFromSD();
+    bool loadWavFromSD(const char* path, uint8_t** buffer, size_t* len);
+    void freeSDBuffers();
     bool playWavFile(const uint8_t* wav_data, size_t len);
     void setVolumeInternal(uint8_t volume_255);
 };

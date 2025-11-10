@@ -7,25 +7,79 @@
 AudioPlayer::AudioPlayer()
     : current_volume(70),
       muted(false),
-      playing(false) {
+      playing(false),
+      sd_manager(nullptr),
+      current_source(AudioSource::FLASH),
+      sd_audio_loaded(false),
+      sd_wav_work_start(nullptr),
+      sd_wav_work_start_len(0),
+      sd_wav_rest_start(nullptr),
+      sd_wav_rest_start_len(0),
+      sd_wav_long_rest_start(nullptr),
+      sd_wav_long_rest_start_len(0),
+      sd_wav_warning(nullptr),
+      sd_wav_warning_len(0) {
+}
+
+// Destructor - free SD buffers
+AudioPlayer::~AudioPlayer() {
+    freeSDBuffers();
 }
 
 bool AudioPlayer::begin() {
+    // Backward compatibility - use FLASH only
+    return begin(nullptr, AudioSource::FLASH);
+}
+
+bool AudioPlayer::begin(SDManager* sd_manager, AudioSource source) {
     // M5Unified already initialized M5.Speaker
     if (!M5.Speaker.isEnabled()) {
         Serial.println("[AudioPlayer] WARNING: Speaker not available");
         return false;
     }
 
-    // Speaker is already enabled by M5.begin() in M5Unified
-    // No need to manually enable AXP192 - M5Unified handles it
+    // Store SD manager reference
+    this->sd_manager = sd_manager;
 
     // Set initial volume (M5.Speaker expects 0-255)
     setVolumeInternal(map(current_volume, 0, 100, 0, 255));
 
     Serial.println("[AudioPlayer] Initialized");
     Serial.printf("[AudioPlayer] Speaker enabled: %s\n", M5.Speaker.isEnabled() ? "yes" : "no");
-    Serial.printf("[AudioPlayer] Available channels: 8\n");
+
+    // Try to load audio from SD card if requested
+    if (source == AudioSource::SD_CARD || source == AudioSource::AUTO) {
+        if (sd_manager && sd_manager->isMounted()) {
+            Serial.println("[AudioPlayer] Attempting to load audio from SD card...");
+            if (loadAudioFromSD()) {
+                current_source = AudioSource::SD_CARD;
+                sd_audio_loaded = true;
+                Serial.println("[AudioPlayer] SD card audio loaded successfully");
+            } else {
+                Serial.println("[AudioPlayer] SD audio load failed");
+                if (source == AudioSource::SD_CARD) {
+                    // User explicitly requested SD only - fail
+                    Serial.println("[AudioPlayer] ERROR: SD_CARD mode but audio not available");
+                    return false;
+                } else {
+                    // AUTO mode - fallback to FLASH
+                    Serial.println("[AudioPlayer] Falling back to FLASH audio");
+                    current_source = AudioSource::FLASH;
+                }
+            }
+        } else {
+            Serial.println("[AudioPlayer] SD card not mounted, using FLASH audio");
+            current_source = AudioSource::FLASH;
+        }
+    } else {
+        // FLASH explicitly requested
+        current_source = AudioSource::FLASH;
+        Serial.println("[AudioPlayer] Using FLASH audio (embedded)");
+    }
+
+    Serial.printf("[AudioPlayer] Audio source: %s\n",
+                  current_source == AudioSource::SD_CARD ? "SD_CARD" : "FLASH");
+
     return true;
 }
 
@@ -47,31 +101,58 @@ void AudioPlayer::play(Sound sound) {
         return;
     }
 
-    // Map Sound enum to PROGMEM WAV data
+    // Map Sound enum to WAV data (SD or PROGMEM)
     const uint8_t* wav_data = nullptr;
     size_t wav_len = 0;
 
-    switch (sound) {
-        case Sound::WORK_START:
-            wav_data = wav_work_start;
-            wav_len = wav_work_start_len;
-            break;
-        case Sound::REST_START:
-            wav_data = wav_rest_start;
-            wav_len = wav_rest_start_len;
-            break;
-        case Sound::LONG_REST_START:
-            wav_data = wav_long_rest_start;
-            wav_len = wav_long_rest_start_len;
-            break;
-        case Sound::WARNING:
-            wav_data = wav_warning;
-            wav_len = wav_warning_len;
-            break;
-        default:
-            Serial.println("[AudioPlayer] Unknown sound, using beep");
-            playBeep();
-            return;
+    // Try SD card first if available
+    if (sd_audio_loaded) {
+        switch (sound) {
+            case Sound::WORK_START:
+                wav_data = sd_wav_work_start;
+                wav_len = sd_wav_work_start_len;
+                break;
+            case Sound::REST_START:
+                wav_data = sd_wav_rest_start;
+                wav_len = sd_wav_rest_start_len;
+                break;
+            case Sound::LONG_REST_START:
+                wav_data = sd_wav_long_rest_start;
+                wav_len = sd_wav_long_rest_start_len;
+                break;
+            case Sound::WARNING:
+                wav_data = sd_wav_warning;
+                wav_len = sd_wav_warning_len;
+                break;
+            default:
+                break;
+        }
+    }
+
+    // Fallback to PROGMEM if SD not available or failed
+    if (wav_data == nullptr) {
+        switch (sound) {
+            case Sound::WORK_START:
+                wav_data = wav_work_start;
+                wav_len = wav_work_start_len;
+                break;
+            case Sound::REST_START:
+                wav_data = wav_rest_start;
+                wav_len = wav_rest_start_len;
+                break;
+            case Sound::LONG_REST_START:
+                wav_data = wav_long_rest_start;
+                wav_len = wav_long_rest_start_len;
+                break;
+            case Sound::WARNING:
+                wav_data = wav_warning;
+                wav_len = wav_warning_len;
+                break;
+            default:
+                Serial.println("[AudioPlayer] Unknown sound, using beep");
+                playBeep();
+                return;
+        }
     }
 
     // Try to play WAV from PROGMEM
@@ -167,4 +248,117 @@ bool AudioPlayer::playWavFile(const uint8_t* wav_data, size_t len) {
 void AudioPlayer::setVolumeInternal(uint8_t volume_255) {
     // M5.Speaker.setVolume() expects 0-255
     M5.Speaker.setVolume(volume_255);
+}
+
+// SD card audio loading (MP-71)
+
+bool AudioPlayer::loadAudioFromSD() {
+    if (!sd_manager || !sd_manager->isMounted()) {
+        return false;
+    }
+
+    // Free any existing buffers
+    freeSDBuffers();
+
+    // Load all 4 WAV files
+    bool success = true;
+
+    if (!loadWavFromSD("/audio/work_start.wav", &sd_wav_work_start, &sd_wav_work_start_len)) {
+        Serial.println("[AudioPlayer] Failed to load work_start.wav");
+        success = false;
+    }
+
+    if (!loadWavFromSD("/audio/rest_start.wav", &sd_wav_rest_start, &sd_wav_rest_start_len)) {
+        Serial.println("[AudioPlayer] Failed to load rest_start.wav");
+        success = false;
+    }
+
+    if (!loadWavFromSD("/audio/long_rest_start.wav", &sd_wav_long_rest_start, &sd_wav_long_rest_start_len)) {
+        Serial.println("[AudioPlayer] Failed to load long_rest_start.wav");
+        success = false;
+    }
+
+    if (!loadWavFromSD("/audio/warning.wav", &sd_wav_warning, &sd_wav_warning_len)) {
+        Serial.println("[AudioPlayer] Failed to load warning.wav");
+        success = false;
+    }
+
+    if (!success) {
+        // If any file failed, free all buffers and report failure
+        freeSDBuffers();
+        return false;
+    }
+
+    Serial.printf("[AudioPlayer] Loaded %d audio files from SD (total: %d bytes)\n",
+                  4, sd_wav_work_start_len + sd_wav_rest_start_len +
+                     sd_wav_long_rest_start_len + sd_wav_warning_len);
+
+    return true;
+}
+
+bool AudioPlayer::loadWavFromSD(const char* path, uint8_t** buffer, size_t* len) {
+    if (!sd_manager || !buffer || !len) {
+        return false;
+    }
+
+    // Check if file exists
+    if (!sd_manager->exists(path)) {
+        Serial.printf("[AudioPlayer] Audio file not found: %s\n", path);
+        return false;
+    }
+
+    // Read file to get size first
+    String wavData = sd_manager->readFile(path);
+    if (wavData.isEmpty()) {
+        Serial.printf("[AudioPlayer] Failed to read audio file: %s\n", path);
+        return false;
+    }
+
+    size_t fileSize = wavData.length();
+
+    // Allocate buffer in PSRAM (M5Core2 has 8MB PSRAM)
+    uint8_t* psramBuffer = (uint8_t*)ps_malloc(fileSize);
+    if (!psramBuffer) {
+        Serial.printf("[AudioPlayer] Failed to allocate %d bytes in PSRAM for %s\n", fileSize, path);
+        return false;
+    }
+
+    // Copy WAV data to PSRAM buffer
+    memcpy(psramBuffer, wavData.c_str(), fileSize);
+
+    // Return buffer and size
+    *buffer = psramBuffer;
+    *len = fileSize;
+
+    Serial.printf("[AudioPlayer] Loaded %s (%d bytes) to PSRAM\n", path, fileSize);
+    return true;
+}
+
+void AudioPlayer::freeSDBuffers() {
+    if (sd_wav_work_start) {
+        free(sd_wav_work_start);
+        sd_wav_work_start = nullptr;
+        sd_wav_work_start_len = 0;
+    }
+
+    if (sd_wav_rest_start) {
+        free(sd_wav_rest_start);
+        sd_wav_rest_start = nullptr;
+        sd_wav_rest_start_len = 0;
+    }
+
+    if (sd_wav_long_rest_start) {
+        free(sd_wav_long_rest_start);
+        sd_wav_long_rest_start = nullptr;
+        sd_wav_long_rest_start_len = 0;
+    }
+
+    if (sd_wav_warning) {
+        free(sd_wav_warning);
+        sd_wav_warning = nullptr;
+        sd_wav_warning_len = 0;
+    }
+
+    sd_audio_loaded = false;
+    Serial.println("[AudioPlayer] Freed SD audio buffers");
 }
