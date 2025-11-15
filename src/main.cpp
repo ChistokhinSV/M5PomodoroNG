@@ -60,118 +60,82 @@ extern TaskHandle_t g_networkTaskHandle;  // Defined in NetworkTask.cpp
 // ============================================================================
 
 /**
- * Test NTP synchronization with minimal WiFi connection
+ * Background NTP sync task (runs once, then deletes itself)
  *
- * This is a temporary test function that allows testing NTP sync before the
- * full WiFi/MQTT implementation in Phase 3. It:
- * 1. Connects to WiFi using credentials from network.ini
- * 2. Creates TimeManager and syncs time via NTP
- * 3. Logs time before/after sync and time source
- * 4. Disconnects WiFi
+ * This task runs asynchronously on Core 1 to avoid blocking startup.
+ * It connects to WiFi, syncs TimeManager via NTP, then disconnects and exits.
  *
- * Call this from setup() after NetworkConfig is loaded to test NTP.
- * Remove this function when Phase 3 WiFi/MQTT is implemented.
+ * Runs as FreeRTOS task - does not block main initialization.
+ * Remove when Phase 3 WiFi/MQTT is implemented.
  */
-void testNTPSync() {
+void backgroundNTPSyncTask(void* parameter) {
+    // Wait 2 seconds for system to stabilize
+    vTaskDelay(pdMS_TO_TICKS(2000));
+
+    Serial.println("\n[Background NTP] Starting async NTP sync...");
+
     if (!g_networkConfig) {
-        Serial.println("[NTP Test] Skipping - NetworkConfig not available");
+        Serial.println("[Background NTP] Skipping - NetworkConfig not available");
+        vTaskDelete(NULL);  // Delete this task
         return;
     }
-
-    Serial.println("\n=== NTP Sync Test (Temporary) ===");
 
     // Get WiFi credentials from network.ini
     auto wifi_settings = g_networkConfig->getWiFi();
     if (strlen(wifi_settings.ssid) == 0) {
-        Serial.println("[NTP Test] ERROR: No WiFi SSID in network.ini");
+        Serial.println("[Background NTP] ERROR: No WiFi SSID in network.ini");
+        vTaskDelete(NULL);
         return;
     }
 
     // Get NTP settings from network.ini
     auto ntp_settings = g_networkConfig->getNTP();
-    Serial.printf("[NTP Test] NTP Server: %s\n", ntp_settings.server);
-    Serial.printf("[NTP Test] Timezone Offset: %d seconds (UTC%+d:%02d)\n",
-                  ntp_settings.timezone_offset,
+    Serial.printf("[Background NTP] NTP Server: %s, Timezone: UTC%+d:%02d\n",
+                  ntp_settings.server,
                   ntp_settings.timezone_offset / 3600,
                   (abs(ntp_settings.timezone_offset) % 3600) / 60);
 
-    // Read time from RTC BEFORE sync
-    Serial.println("\n[NTP Test] Time BEFORE sync:");
-    auto dt = M5.Rtc.getDateTime();
-    Serial.printf("[NTP Test]   RTC: %04d-%02d-%02d %02d:%02d:%02d\n",
-                  dt.date.year, dt.date.month, dt.date.date,
-                  dt.time.hours, dt.time.minutes, dt.time.seconds);
-
-    // Connect to WiFi
-    Serial.printf("[NTP Test] Connecting to WiFi: %s", wifi_settings.ssid);
+    // Connect to WiFi (non-blocking startup)
+    Serial.printf("[Background NTP] Connecting to WiFi: %s", wifi_settings.ssid);
     WiFi.mode(WIFI_STA);
     WiFi.begin(wifi_settings.ssid, wifi_settings.password);
 
     // Wait for connection (max 15 seconds)
     uint32_t start_ms = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start_ms < 15000) {
-        delay(500);
+        vTaskDelay(pdMS_TO_TICKS(500));
         Serial.print(".");
     }
     Serial.println();
 
     if (WiFi.status() != WL_CONNECTED) {
-        Serial.println("[NTP Test] ERROR: WiFi connection failed");
-        Serial.println("[NTP Test] Check SSID/password in network.ini");
+        Serial.println("[Background NTP] WiFi connection failed");
         WiFi.disconnect(true);
+        vTaskDelete(NULL);
         return;
     }
 
-    Serial.printf("[NTP Test] WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
+    Serial.printf("[Background NTP] WiFi connected, IP: %s\n", WiFi.localIP().toString().c_str());
 
-    // Create global TimeManager and sync
-    g_timeManager = new TimeManager();
-    if (!g_timeManager->begin(ntp_settings.timezone_offset)) {
-        Serial.println("[NTP Test] ERROR: TimeManager initialization failed");
-        WiFi.disconnect(true);
-        delete g_timeManager;
-        g_timeManager = nullptr;
-        return;
-    }
-
-    Serial.println("[NTP Test] TimeManager initialized, syncing with NTP...");
-    if (g_timeManager->syncNow()) {
-        Serial.println("[NTP Test] NTP sync successful!");
-
-        // Read time AFTER sync
-        Serial.println("\n[NTP Test] Time AFTER sync:");
-        auto dt_after = M5.Rtc.getDateTime();
-        Serial.printf("[NTP Test]   RTC: %04d-%02d-%02d %02d:%02d:%02d\n",
-                      dt_after.date.year, dt_after.date.month, dt_after.date.date,
-                      dt_after.time.hours, dt_after.time.minutes, dt_after.time.seconds);
+    // Sync TimeManager with NTP (TimeManager already created in setup())
+    if (g_timeManager && g_timeManager->syncNow()) {
+        Serial.println("[Background NTP] NTP sync successful!");
 
         char time_str[16], date_str[16];
         g_timeManager->getTimeString(time_str, sizeof(time_str));
         g_timeManager->getDateString(date_str, sizeof(date_str));
-        Serial.printf("[NTP Test]   Formatted: %s %s\n", date_str, time_str);
-        Serial.printf("[NTP Test]   Epoch: %u\n", g_timeManager->getEpoch());
-
-        // Show time source
-        const char* source_name = "UNKNOWN";
-        switch (g_timeManager->getTimeSource()) {
-            case TimeManager::TimeSource::RTC: source_name = "RTC"; break;
-            case TimeManager::TimeSource::NTP: source_name = "NTP"; break;
-            case TimeManager::TimeSource::SD_FILE: source_name = "SD_FILE"; break;
-            case TimeManager::TimeSource::FALLBACK_DEFAULT: source_name = "FALLBACK_DEFAULT"; break;
-            default: break;
-        }
-        Serial.printf("[NTP Test]   Time Source: %s\n", source_name);
-        Serial.printf("[NTP Test]   Time Synced: %s\n", g_timeManager->isTimeSynced() ? "YES" : "NO");
-
+        Serial.printf("[Background NTP] Time: %s %s (synced from %s)\n",
+                      date_str, time_str, ntp_settings.server);
     } else {
-        Serial.println("[NTP Test] ERROR: NTP sync failed");
-        Serial.println("[NTP Test] Check NTP server in network.ini");
+        Serial.println("[Background NTP] NTP sync failed");
     }
 
     // Disconnect WiFi
     WiFi.disconnect(true);
-    Serial.println("[NTP Test] WiFi disconnected");
-    Serial.println("=== NTP Test Complete ===\n");
+    Serial.println("[Background NTP] Complete, WiFi disconnected\n");
+
+    // Delete this task (runs once only)
+    vTaskDelete(NULL);
 }
 
 // ============================================================================
@@ -230,11 +194,7 @@ void setup() {
                 Serial.println("[WARN] SSL certificates not available - TLS connections disabled");
             }
 
-            // TEST NTP SYNC (Temporary - comment out if not needed)
-            // This tests NTP synchronization before Phase 3 WiFi/MQTT implementation
-            // Requires WiFi SSID/password in network.ini
-            // Comment out this line to skip NTP test:
-            testNTPSync();
+            // Note: Background NTP sync task will be launched later (non-blocking)
         } else {
             Serial.println("[WARN] Failed to load network.ini - cloud sync disabled");
             Serial.println("[INFO] Copy config/network.ini.template to SD:/config/network.ini");
@@ -243,20 +203,22 @@ void setup() {
         Serial.println("[INFO] SD card not available - operating in offline mode");
     }
 
-    // Initialize TimeManager if not already created by testNTPSync()
-    if (!g_timeManager) {
-        Serial.println("[TimeManager] Creating with default settings (RTC only, no NTP sync)");
-        g_timeManager = new TimeManager();
-        int32_t default_offset = 0;  // UTC
-        if (g_networkConfig) {
-            // Use timezone from network.ini if available
-            default_offset = g_networkConfig->getNTP().timezone_offset;
-        }
-        if (!g_timeManager->begin(default_offset)) {
-            Serial.println("[WARN] TimeManager initialization failed - using fallback time");
-        } else {
-            Serial.println("[OK] TimeManager initialized from RTC");
-        }
+    // Initialize TimeManager early (uses RTC, background task will sync NTP later)
+    Serial.println("[TimeManager] Initializing from RTC...");
+    g_timeManager = new TimeManager();
+    int32_t timezone_offset = 0;  // UTC default
+    if (g_networkConfig) {
+        // Use timezone from network.ini if available
+        timezone_offset = g_networkConfig->getNTP().timezone_offset;
+    }
+    if (!g_timeManager->begin(timezone_offset)) {
+        Serial.println("[WARN] TimeManager initialization failed - using fallback time");
+    } else {
+        Serial.println("[OK] TimeManager initialized from RTC");
+        char time_str[16], date_str[16];
+        g_timeManager->getTimeString(time_str, sizeof(time_str));
+        g_timeManager->getDateString(date_str, sizeof(date_str));
+        Serial.printf("[TimeManager] Current time: %s %s\n", date_str, time_str);
     }
 
     // Allocate core components
@@ -448,6 +410,25 @@ void setup() {
         while (1) delay(100);
     }
     Serial.println("[OK] Network task created on Core 1 (10KB stack, priority 1)");
+
+    // Create Background NTP Sync Task (one-time, self-deleting)
+    if (g_networkConfig) {
+        BaseType_t ntp_result = xTaskCreatePinnedToCore(
+            backgroundNTPSyncTask,  // Task function
+            "ntp_sync",            // Task name
+            8192,                  // Stack size (8KB)
+            NULL,                  // Parameters
+            1,                     // Priority (same as others)
+            NULL,                  // No handle needed (task deletes itself)
+            1                      // Core 1 (same as network)
+        );
+
+        if (ntp_result == pdPASS) {
+            Serial.println("[OK] Background NTP sync task created (will run after 2 sec delay)");
+        } else {
+            Serial.println("[WARN] Failed to create background NTP sync task");
+        }
+    }
 
     Serial.println("\n=== Multi-core Architecture Active ===");
     Serial.println("Core 0: UI, input, state machine, audio, LEDs");
