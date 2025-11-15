@@ -211,10 +211,11 @@ void setup() {
         // Use timezone from network.ini if available
         timezone_offset = g_networkConfig->getNTP().timezone_offset;
     }
-    if (!g_timeManager->begin(timezone_offset)) {
+    // Pass SDManager pointer for emergency fallback (RTC → SD → Default)
+    if (!g_timeManager->begin(timezone_offset, g_sdManager)) {
         Serial.println("[WARN] TimeManager initialization failed - using fallback time");
     } else {
-        Serial.println("[OK] TimeManager initialized from RTC");
+        Serial.println("[OK] TimeManager initialized");
         char time_str[16], date_str[16];
         g_timeManager->getTimeString(time_str, sizeof(time_str));
         g_timeManager->getDateString(date_str, sizeof(date_str));

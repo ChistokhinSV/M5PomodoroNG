@@ -7,6 +7,9 @@
 #include <cstdint>
 #include <ctime>
 
+// Forward declaration
+class SDManager;
+
 /**
  * Time management with M5.Rtc (BM8563) as primary source + NTP sync
  *
@@ -37,7 +40,7 @@ public:
 
     // Initialize with timezone offset (seconds from UTC)
     // Loads time from M5.Rtc, validates, falls back to SD/default if invalid
-    bool begin(int32_t utc_offset_sec = 0);
+    bool begin(int32_t utc_offset_sec = 0, SDManager* sd = nullptr);
 
     // NTP synchronization (updates M5.Rtc)
     bool syncNow();                    // Force immediate NTP sync, update RTC
@@ -74,6 +77,9 @@ public:
     // Update loop (call periodically)
     void update();
 
+    // SD card persistence (emergency fallback only)
+    void saveTimeToSD(SDManager& sd);  // Save time to /config/lasttime.txt
+
     // RTC drift compensation
     float getDriftPPM() const { return drift_ppm; }  // Parts per million
 
@@ -109,6 +115,7 @@ private:
     void epochToRTC(uint32_t epoch, m5::rtc_datetime_t& dt) const;  // Convert epoch to RTC struct
     void updateDriftEstimate(uint32_t ntp_epoch);
     void calculateMidnight();
+    bool loadTimeFromSD(SDManager& sd);            // Load emergency time from SD file
 };
 
 #endif // TIME_MANAGER_H

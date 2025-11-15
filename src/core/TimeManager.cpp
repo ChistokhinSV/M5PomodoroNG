@@ -1,6 +1,10 @@
 #include "TimeManager.h"
+#include "../hardware/SDManager.h"
 #include <Arduino.h>
 #include <time.h>
+
+// External global pointer (defined in main.cpp)
+extern SDManager* g_sdManager;
 
 TimeManager::TimeManager()
     : ntp_client(nullptr),
@@ -20,7 +24,7 @@ TimeManager::~TimeManager() {
     }
 }
 
-bool TimeManager::begin(int32_t utc_offset) {
+bool TimeManager::begin(int32_t utc_offset, SDManager* sd) {
     utc_offset_sec = utc_offset;
 
     // Initialize NTPClient with UDP (for future NTP sync)
@@ -41,8 +45,18 @@ bool TimeManager::begin(int32_t utc_offset) {
         return true;
     }
 
-    // RTC invalid - set default time and save to RTC
-    Serial.println("[TimeManager] WARN: RTC time invalid, using default (2025-01-01)");
+    // RTC invalid - try SD card emergency fallback (if available)
+    if (sd && sd->isMounted() && loadTimeFromSD(*sd)) {
+        Serial.println("[TimeManager] Time loaded from SD emergency file");
+        // Save loaded SD time to RTC (so it persists)
+        saveTimeToRTC(last_sync_epoch);
+        time_source = TimeSource::SD_FILE;
+        calculateMidnight();
+        return true;
+    }
+
+    // RTC + SD invalid - set default time and save to RTC
+    Serial.println("[TimeManager] WARN: RTC + SD invalid, using default (2025-01-01)");
     if (saveTimeToRTC(DEFAULT_EPOCH)) {
         last_sync_epoch = DEFAULT_EPOCH;
         last_sync_millis = millis();
@@ -104,6 +118,11 @@ bool TimeManager::syncNow() {
 
     // Calculate midnight boundary
     calculateMidnight();
+
+    // Save to SD card emergency file (if available)
+    if (g_sdManager && g_sdManager->isMounted()) {
+        saveTimeToSD(*g_sdManager);
+    }
 
     Serial.printf("[TimeManager] NTP synced: %lu (saved to RTC)\n", ntp_epoch);
     return true;
@@ -330,4 +349,62 @@ void TimeManager::calculateMidnight() {
     // Calculate start of current day (midnight UTC + offset)
     uint32_t day_start = (epoch / 86400) * 86400;
     last_midnight_epoch = day_start;
+}
+
+bool TimeManager::loadTimeFromSD(SDManager& sd) {
+    // Check if emergency time file exists
+    if (!sd.exists("/config/lasttime.txt")) {
+        Serial.println("[TimeManager] SD emergency file not found");
+        return false;
+    }
+
+    // Read Unix epoch timestamp from file
+    String epochStr = sd.readFile("/config/lasttime.txt");
+    epochStr.trim();  // Remove whitespace/newlines
+
+    if (epochStr.length() == 0) {
+        Serial.println("[TimeManager] SD emergency file is empty");
+        return false;
+    }
+
+    uint32_t saved_epoch = epochStr.toInt();
+
+    // Validate: Must be after 2024-01-01 (1704067200)
+    if (saved_epoch < 1704067200) {
+        Serial.printf("[TimeManager] SD time invalid: %lu (too old)\n", saved_epoch);
+        return false;
+    }
+
+    // Set as temporary time (until NTP sync)
+    last_sync_epoch = saved_epoch;
+    last_sync_millis = millis();
+
+    Serial.printf("[TimeManager] Loaded emergency time from SD: %lu\n", saved_epoch);
+    return true;
+}
+
+void TimeManager::saveTimeToSD(SDManager& sd) {
+    // Only save if we have NTP-synced time
+    if (!time_synced) {
+        return;  // Silently skip if not synced
+    }
+
+    // Validate SD is mounted
+    if (!sd.isMounted()) {
+        return;  // Silently skip if SD not available
+    }
+
+    uint32_t epoch = getEpoch();
+
+    // Validate epoch (must be after 2024-01-01)
+    if (epoch < 1704067200) {
+        return;  // Don't save invalid time
+    }
+
+    // Write Unix epoch timestamp as text file
+    if (sd.writeFile("/config/lasttime.txt", String(epoch))) {
+        Serial.printf("[TimeManager] Saved emergency time to SD: %lu\n", epoch);
+    } else {
+        Serial.println("[TimeManager] WARN: Failed to save time to SD");
+    }
 }
