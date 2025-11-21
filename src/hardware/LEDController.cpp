@@ -71,6 +71,26 @@ void LEDController::show() {
     FastLED.show();
 }
 
+void LEDController::powerDown() {
+    // MP-30: Power down LEDs before deep sleep to prevent glow
+    // Sequence: clear buffer → push to hardware → wait → disable 5V boost
+
+    Serial.println("[LEDController] Powering down LEDs for deep sleep...");
+
+    // Clear LED buffer and push to hardware
+    clear();
+    show();
+
+    // Wait for LEDs to physically turn off
+    delay(10);
+
+    // Disable 5V boost (AXP192 EXTEN register)
+    // This cuts power to the LED strip completely
+    M5.Power.setExtOutput(false);
+
+    Serial.println("[LEDController] 5V boost disabled - LEDs should be dark");
+}
+
 void LEDController::setBrightness(uint8_t percent) {
     brightness = constrain(percent, 0, 100);
     Serial.printf("[LEDController] User brightness set to %d%%\n", brightness);

@@ -5,6 +5,9 @@
 #include "../ui/ScreenManager.h"
 #include "../hardware/IAudioPlayer.h"
 #include "../core/TimeManager.h"
+#include "../core/Config.h"
+#include "../core/SleepState.h"
+#include "../hardware/IPowerManager.h"
 
 /**
  * UI Task (Core 0 - Protocol CPU)
@@ -40,12 +43,19 @@ extern IHapticController* g_hapticController;
 extern TimerStateMachine* g_stateMachine;
 extern PomodoroSequence* g_sequence;
 extern TimeManager* g_timeManager;
+extern Config* g_config;
+extern IPowerManager* g_powerManager;
 
 // Task timing
 static uint32_t g_lastUpdate = 0;
 static uint32_t g_lastSecond = 0;
 static uint32_t g_lastTaskMonitor = 0;  // MP-47: Task monitoring
 static uint8_t g_last_valid_battery = 100;
+
+// Idle tracking for sleep mode (MP-30)
+static uint32_t g_lastInteraction = 0;  // Last user interaction timestamp
+static uint32_t g_idleDuration = 0;     // Time spent idle (ms)
+static constexpr uint32_t LIGHT_SLEEP_THRESHOLD_MS = 30 * 60 * 1000;  // 30 minutes
 
 void uiTask(void* parameter) {
     Serial.println("[UITask] Starting on Core 0...");
@@ -55,12 +65,16 @@ void uiTask(void* parameter) {
 
     g_lastUpdate = millis();
     g_lastSecond = millis();
+    g_lastInteraction = millis();  // Initialize idle tracking
 
     while (true) {
         // Poll M5 hardware (touch, buttons, I2C sensors)
         M5.update();
 
         // Handle hardware button presses (BtnA/B/C capacitive touch zones)
+        if (M5.BtnA.wasPressed() || M5.BtnB.wasPressed() || M5.BtnC.wasPressed()) {
+            g_lastInteraction = millis();  // Reset idle timer
+        }
         g_screenManager->handleHardwareButtons();
 
         // Handle touch events (for widgets like sliders/toggles)
@@ -68,10 +82,12 @@ void uiTask(void* parameter) {
 
         if (touch.wasPressed()) {
             g_screenManager->handleTouch(touch.x, touch.y, true);
+            g_lastInteraction = millis();  // Reset idle timer
         }
 
         if (touch.wasReleased()) {
             g_screenManager->handleTouch(touch.x, touch.y, false);
+            g_lastInteraction = millis();  // Reset idle timer
         }
 
         // Update at 30 FPS (~33ms per frame)
@@ -194,6 +210,56 @@ void uiTask(void* parameter) {
             Serial.println("  Queues: Active (network status messages)");
             Serial.println("  Both cores running: YES");
             Serial.println("=========================================\n");
+        }
+
+        // MP-30: Check sleep conditions (adaptive: light sleep <30min, deep sleep >=30min)
+        auto power_settings = g_config->getPower();
+        if (power_settings.auto_sleep_enabled && power_settings.sleep_after_min > 0) {
+            // Calculate idle duration
+            g_idleDuration = now - g_lastInteraction;
+            uint32_t sleep_threshold_ms = power_settings.sleep_after_min * 60 * 1000;
+
+            // Check if idle timeout exceeded
+            if (g_idleDuration >= sleep_threshold_ms) {
+                // Check if in IDLE or PAUSED state (sleep-eligible states)
+                auto state = g_stateMachine->getState();
+                bool sleep_eligible = (state == TimerStateMachine::State::IDLE ||
+                                       state == TimerStateMachine::State::PAUSED);
+
+                if (sleep_eligible) {
+                    // Check DC power condition (skip sleep if charging and configured)
+                    bool is_charging = M5.Power.isCharging();
+                    bool skip_sleep = is_charging && !power_settings.sleep_on_dc_power;
+
+                    if (!skip_sleep) {
+                        // MP-80: Use deep sleep only (light sleep has FreeRTOS dual-core issues)
+                        Serial.printf("[UITask] Idle %lu min - entering DEEP SLEEP\n", g_idleDuration / 60000);
+
+                        // Save current LED pattern for restoration
+                        ILEDController::TimerState led_pattern = ILEDController::TimerState::IDLE;
+                        if (state == TimerStateMachine::State::IDLE) {
+                            led_pattern = ILEDController::TimerState::WARNING;  // Yellow flash mode
+                        } else if (state == TimerStateMachine::State::PAUSED) {
+                            led_pattern = ILEDController::TimerState::PAUSED;  // Red blink
+                        }
+
+                        // Save state to RTC memory
+                        SleepState::save(*g_stateMachine, *g_sequence, led_pattern);
+
+                        // Power down LEDs (clear + disable 5V boost)
+                        g_ledController->powerDown();
+                        delay(100);  // Wait for power to stabilize
+
+                        // Enter deep sleep (device will reset on wake)
+                        g_powerManager->enterDeepSleep(0);  // Infinite sleep, wake on touch
+
+                        // Note: Code never reaches here (ESP32 resets on wake)
+                    } else {
+                        Serial.println("[UITask] Charging detected - skip sleep (DC power = OFF)");
+                        g_lastInteraction = millis();  // Reset to prevent repeated log spam
+                    }
+                }
+            }
         }
 
         // Small delay to prevent watchdog and allow other tasks to run

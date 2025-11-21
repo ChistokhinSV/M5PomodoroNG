@@ -115,6 +115,13 @@ public:
      */
     virtual void show() = 0;
 
+    /**
+     * Power down LED hardware before deep sleep (MP-30)
+     * Clears LED buffer, pushes to hardware, and disables 5V boost
+     * Must be called before entering deep sleep to prevent LED glow
+     */
+    virtual void powerDown() = 0;
+
     // ====================
     // Brightness Control
     // ====================

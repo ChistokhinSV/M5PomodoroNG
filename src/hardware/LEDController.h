@@ -41,6 +41,7 @@ public:
     void setPixel(uint8_t index, Color color) override;
     void clear() override;
     void show() override;  // Update LED strip
+    void powerDown() override;  // MP-30: Disable 5V boost before deep sleep
 
     // Brightness control (0-100%)
     void setBrightness(uint8_t percent) override;
