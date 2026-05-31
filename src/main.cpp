@@ -13,6 +13,7 @@
 #include "core/TimeManager.h"
 #include "core/TimerStateMachine.h"
 #include "core/PomodoroSequence.h"
+#include "core/SleepState.h"
 #include "core/Statistics.h"
 #include "core/SyncPrimitives.h"
 #include "hardware/SDManager.h"
@@ -22,6 +23,8 @@
 #include "hardware/AudioPlayer.h"
 #include "hardware/IHapticController.h"
 #include "hardware/HapticController.h"
+#include "hardware/IPowerManager.h"
+#include "hardware/PowerManager.h"
 #include "tasks/UITask.h"
 #include "tasks/NetworkTask.h"
 
@@ -50,6 +53,7 @@ Statistics* g_statistics = nullptr;
 Config* g_config = nullptr;
 ILEDController* g_ledController = nullptr;
 IHapticController* g_hapticController = nullptr;
+IPowerManager* g_powerManager = nullptr;
 
 // FreeRTOS task handles (for monitoring)
 TaskHandle_t g_uiTaskHandle = NULL;
@@ -154,6 +158,19 @@ void setup() {
     Serial.println("M5 Pomodoro v2 - ScreenManager Test");
     Serial.println("=================================");
 
+    // MP-30: Check wake reason (deep sleep detection)
+    esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
+    bool woke_from_deep_sleep = false;
+    if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
+        Serial.println("[WAKE] Woke from DEEP SLEEP (touch screen)");
+        woke_from_deep_sleep = true;
+    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_TIMER) {
+        Serial.println("[WAKE] Woke from DEEP SLEEP (timer)");
+        woke_from_deep_sleep = true;
+    } else if (wakeup_reason == ESP_SLEEP_WAKEUP_UNDEFINED) {
+        Serial.println("[BOOT] Normal power-on or reset");
+    }
+
     // Check PSRAM
     if (psramFound()) {
         size_t psram_size = ESP.getPsramSize();
@@ -244,6 +261,14 @@ void setup() {
         Serial.println("[ERROR] Failed to initialize config");
     } else {
         Serial.println("[OK] Config initialized");
+    }
+
+    // Initialize power manager (MP-30: sleep modes, battery monitoring)
+    g_powerManager = new PowerManager();
+    if (!g_powerManager->begin()) {
+        Serial.println("[ERROR] Failed to initialize power manager");
+    } else {
+        Serial.println("[OK] Power manager initialized");
     }
 
     // Initialize statistics
@@ -352,6 +377,16 @@ void setup() {
     // Create ScreenManager (owns all 4 screens)
     g_screenManager = new ScreenManager(*g_stateMachine, *g_sequence, *g_statistics, *g_config, *g_ledController, *g_hapticController);
     Serial.println("[OK] ScreenManager initialized with 4 screens");
+
+    // MP-30: Restore state from deep sleep wake (if applicable)
+    if (woke_from_deep_sleep) {
+        Serial.println("[WAKE] Attempting to restore state from RTC memory...");
+        if (SleepState::restore(*g_stateMachine, *g_sequence, g_ledController)) {
+            Serial.println("[WAKE] State restored successfully!");
+        } else {
+            Serial.println("[WAKE] No valid RTC data - starting fresh");
+        }
+    }
 
     // Note: M5Unified BtnA/B/C zones are fixed at y=240-320, cannot be adjusted
     // On-screen labels at y=218-240 are visual indicators only, actual touch zones are below

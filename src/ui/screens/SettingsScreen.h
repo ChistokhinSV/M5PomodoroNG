@@ -98,10 +98,11 @@ private:
     Toggle toggle_show_seconds_;
     Slider slider_timeout_;
 
-    // Page 2: Power settings (4 widgets + button)
+    // Page 2: Power settings (5 widgets + button)
     Toggle toggle_auto_sleep_;
     Slider slider_sleep_after_;
     Toggle toggle_wake_rotation_;
+    Toggle toggle_sleep_on_dc_;
     Slider slider_min_battery_;
 
     // Note: Navigation buttons removed, now using hardware buttons
@@ -156,6 +157,7 @@ private:
     void onAutoSleepChange(bool state);
     void onSleepAfterChange(uint16_t value);
     void onWakeRotationChange(bool state);
+    void onSleepOnDCChange(bool state);
     void onMinBatteryChange(uint16_t value);
 };
 

@@ -49,12 +49,15 @@ public:
     Session getCurrentSession() const;
     Session getNextSession() const;
     bool advance();              // Move to next session, returns true if cycle completed
+    void setCurrentSession(uint8_t session);  // Restore specific session (for wake from sleep)
 
     // Query methods (work session based)
     uint8_t getTotalWorkSessions() const;      // Total work sessions (sessions_before_long × num_cycles)
     uint8_t getCurrentWorkSession() const;      // Current work session number (1-N)
+    uint8_t getCurrentCycle() const;           // Current cycle number (1-based, calculated from current_session)
     uint8_t getSessionsBeforeLong() const;     // Sessions per cycle (custom_sessions_before_long)
     uint8_t getCompletedToday() const { return completed_today; }
+    void setCompletedToday(uint8_t count) { completed_today = count; }  // For state restoration
     bool isWorkSession() const;
     bool isBreakSession() const;
     bool isLongBreak() const;

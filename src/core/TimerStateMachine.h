@@ -88,6 +88,9 @@ public:
     // Reset to IDLE
     void reset();
 
+    // Restore state from deep sleep (MP-30)
+    void restoreState(State saved_state, uint32_t saved_remaining_ms, uint32_t saved_total_ms);
+
 private:
     PomodoroSequence& sequence;
     State state = State::IDLE;

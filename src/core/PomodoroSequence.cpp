@@ -111,6 +111,19 @@ uint8_t PomodoroSequence::getSessionsBeforeLong() const {
     return custom_sessions_before_long;
 }
 
+uint8_t PomodoroSequence::getCurrentCycle() const {
+    // Calculate cycle number from current session (interval)
+    // Each cycle has (sessions_before_long × 2) intervals
+    uint8_t intervals_per_cycle = custom_sessions_before_long * 2;
+    return ((current_session - 1) / intervals_per_cycle) + 1;  // 1-based
+}
+
+void PomodoroSequence::setCurrentSession(uint8_t session) {
+    uint8_t total = getTotalIntervals();
+    current_session = constrain(session, 1, total);
+    Serial.printf("[PomodoroSequence] Session restored to %d (of %d)\n", current_session, total);
+}
+
 bool PomodoroSequence::isNextLongBreak() const {
     uint8_t next_session = current_session + 1;
     uint8_t total = getTotalIntervals();

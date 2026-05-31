@@ -1,5 +1,6 @@
 #include "PowerManager.h"
 #include <Arduino.h>
+#include "esp_task_wdt.h"
 
 PowerManager::PowerManager()
     : current_brightness(80),
@@ -60,11 +61,18 @@ void PowerManager::enterLightSleep(uint32_t duration_ms) {
 
     current_sleep_mode = SleepMode::LIGHT;
 
-    // Configure timer wakeup
+    // Disable task watchdog for this task (prevents reset during long sleep)
+    esp_task_wdt_delete(NULL);
+
+    // Configure wake sources
     esp_sleep_enable_timer_wakeup(duration_ms * 1000);  // microseconds
+    configureTouchWake();  // Touch screen wake
 
     // Light sleep (CPU stops, RAM retained)
     esp_light_sleep_start();
+
+    // Re-enable task watchdog after wake
+    esp_task_wdt_add(NULL);
 
     current_sleep_mode = SleepMode::NONE;
     Serial.println("[PowerManager] Woke from light sleep");
@@ -76,8 +84,11 @@ void PowerManager::enterDeepSleep(uint32_t duration_sec) {
 
     current_sleep_mode = SleepMode::DEEP;
 
-    // Configure timer wakeup (deep sleep uses seconds)
-    esp_sleep_enable_timer_wakeup(duration_sec * 1000000ULL);  // microseconds
+    // Configure wake sources
+    if (duration_sec > 0) {
+        esp_sleep_enable_timer_wakeup(duration_sec * 1000000ULL);  // microseconds
+    }
+    configureTouchWake();  // Touch screen wake
 
     // Deep sleep (only RTC active, reset on wake)
     M5.Power.deepSleep(duration_sec);
@@ -153,6 +164,25 @@ bool PowerManager::isLowBattery() const {
 
 bool PowerManager::isCriticalBattery() const {
     return getBatteryLevel() <= 5 && !isCharging();
+}
+
+void PowerManager::configureTouchWake() {
+    // M5Core2 capacitive touch interrupt is on GPIO4
+    // Configure as EXT0 wake source (low level = touched)
+    // Note: M5Core2 touch controller pulls GPIO4 LOW when touched
+
+    const int TOUCH_INT_PIN = 4;  // GPIO4 - touch interrupt
+
+    // Configure GPIO4 as input with pull-up (ensures reliable interrupt detection)
+    pinMode(TOUCH_INT_PIN, INPUT_PULLUP);
+
+    // Hold GPIO configuration during sleep (prevents config reset)
+    gpio_deep_sleep_hold_en();
+
+    // Enable EXT0 wake on GPIO4 (wake on LOW level)
+    esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(TOUCH_INT_PIN), 0);  // 0 = LOW
+
+    Serial.println("[PowerManager] Touch wake configured (GPIO4, active LOW, pull-up enabled)");
 }
 
 void PowerManager::printStatus() const {

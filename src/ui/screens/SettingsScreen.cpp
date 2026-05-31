@@ -148,7 +148,7 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
 
     slider_sleep_after_.setBounds(10, y, 300, WIDGET_HEIGHT);
     slider_sleep_after_.setLabel("Sleep after:");
-    slider_sleep_after_.setRange(0, 600);
+    slider_sleep_after_.setRange(1, 60);  // 1-60 minutes
     slider_sleep_after_.setDisplayMode(Slider::DisplayMode::TIME_MIN);
     slider_sleep_after_.setCallback([this](uint16_t val) { this->onSleepAfterChange(val); });
     slider_sleep_after_.setMarginBottom(10);
@@ -159,6 +159,12 @@ SettingsScreen::SettingsScreen(Config& config, NavigationCallback navigate_callb
     toggle_wake_rotation_.setCallback([this](bool val) { this->onWakeRotationChange(val); });
     toggle_wake_rotation_.setMarginBottom(10);
     y += toggle_wake_rotation_.getTotalHeight();
+
+    toggle_sleep_on_dc_.setBounds(10, y, 300, 20);  // Toggle height = 20px
+    toggle_sleep_on_dc_.setLabel("Sleep on DC power");
+    toggle_sleep_on_dc_.setCallback([this](bool val) { this->onSleepOnDCChange(val); });
+    toggle_sleep_on_dc_.setMarginBottom(10);
+    y += toggle_sleep_on_dc_.getTotalHeight();
 
     slider_min_battery_.setBounds(10, y, 300, WIDGET_HEIGHT);
     slider_min_battery_.setLabel("Low battery:");
@@ -224,6 +230,7 @@ void SettingsScreen::loadFromConfig() {
     toggle_auto_sleep_.setState(power.auto_sleep_enabled);
     slider_sleep_after_.setValue(power.sleep_after_min);
     toggle_wake_rotation_.setState(power.wake_on_rotation);
+    toggle_sleep_on_dc_.setState(power.sleep_on_dc_power);
     slider_min_battery_.setValue(power.min_battery_percent);
 
     // MP-50: Set initial custom button label
@@ -305,10 +312,12 @@ void SettingsScreen::update(uint32_t deltaMs) {
         toggle_auto_sleep_.setVisible(true);
         slider_sleep_after_.setVisible(true);
         toggle_wake_rotation_.setVisible(true);
+        toggle_sleep_on_dc_.setVisible(true);
         slider_min_battery_.setVisible(true);
         toggle_auto_sleep_.update(deltaMs);
         slider_sleep_after_.update(deltaMs);
         toggle_wake_rotation_.update(deltaMs);
+        toggle_sleep_on_dc_.update(deltaMs);
         slider_min_battery_.update(deltaMs);
     }
 
@@ -415,10 +424,11 @@ void SettingsScreen::drawPage3(Renderer& renderer) {
 }
 
 void SettingsScreen::drawPage4(Renderer& renderer) {
-    // Page 4: Power settings (4 widgets)
+    // Page 4: Power settings (5 widgets)
     toggle_auto_sleep_.draw(renderer);
     slider_sleep_after_.draw(renderer);
     toggle_wake_rotation_.draw(renderer);
+    toggle_sleep_on_dc_.draw(renderer);
     slider_min_battery_.draw(renderer);
 }
 
@@ -547,6 +557,12 @@ void SettingsScreen::onSleepAfterChange(uint16_t value) {
 void SettingsScreen::onWakeRotationChange(bool state) {
     auto power = config_.getPower();
     power.wake_on_rotation = state;
+    config_.setPower(power);
+}
+
+void SettingsScreen::onSleepOnDCChange(bool state) {
+    auto power = config_.getPower();
+    power.sleep_on_dc_power = state;
     config_.setPower(power);
 }
 

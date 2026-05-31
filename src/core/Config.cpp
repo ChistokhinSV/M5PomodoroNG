@@ -79,6 +79,7 @@ bool Config::load() {
     power.auto_sleep_enabled = prefs.getBool("pwr_auto", true);
     power.sleep_after_min = prefs.getUShort("pwr_timeout", 60);
     power.wake_on_rotation = prefs.getBool("pwr_wake_rot", true);
+    power.sleep_on_dc_power = prefs.getBool("pwr_dc_sleep", true);
     power.min_battery_percent = prefs.getUChar("pwr_min_bat", 10);
 
     dirty = false;
@@ -130,6 +131,7 @@ bool Config::save() {
     prefs.putBool("pwr_auto", power.auto_sleep_enabled);
     prefs.putUShort("pwr_timeout", power.sleep_after_min);
     prefs.putBool("pwr_wake_rot", power.wake_on_rotation);
+    prefs.putBool("pwr_dc_sleep", power.sleep_on_dc_power);
     prefs.putUChar("pwr_min_bat", power.min_battery_percent);
 
     dirty = false;

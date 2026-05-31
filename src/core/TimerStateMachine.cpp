@@ -230,6 +230,22 @@ void TimerStateMachine::reset() {
     transition(State::IDLE);
 }
 
+void TimerStateMachine::restoreState(State saved_state, uint32_t saved_remaining_ms, uint32_t saved_total_ms) {
+    MutexGuard guard(state_mutex_, "state_mutex", 50);
+    if (!guard.isLocked()) {
+        Serial.println("[TimerStateMachine] ERROR: Failed to acquire mutex in restoreState");
+        return;
+    }
+
+    // Restore state variables
+    state = saved_state;
+    remaining_ms = saved_remaining_ms;
+    total_ms = saved_total_ms;
+
+    Serial.printf("[TimerStateMachine] State restored: state=%d, remaining=%lums, total=%lums\n",
+                  static_cast<int>(state), remaining_ms, total_ms);
+}
+
 void TimerStateMachine::indicateSessionReady() {
     // Show yellow flash when waiting for user to start next session
     // Called by timeout callback when auto-start is disabled
