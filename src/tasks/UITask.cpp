@@ -215,6 +215,13 @@ void uiTask(void* parameter) {
         // MP-30: Check sleep conditions (adaptive: light sleep <30min, deep sleep >=30min)
         auto power_settings = g_config->getPower();
         if (power_settings.auto_sleep_enabled && power_settings.sleep_after_min > 0) {
+            // A running timer is not "idle" — keep the interaction timestamp current so the
+            // idle countdown only begins once the timer actually returns to IDLE/PAUSED.
+            auto state = g_stateMachine->getState();
+            if (state == TimerStateMachine::State::ACTIVE) {
+                g_lastInteraction = now;
+            }
+
             // Calculate idle duration
             g_idleDuration = now - g_lastInteraction;
             uint32_t sleep_threshold_ms = power_settings.sleep_after_min * 60 * 1000;
@@ -222,7 +229,6 @@ void uiTask(void* parameter) {
             // Check if idle timeout exceeded
             if (g_idleDuration >= sleep_threshold_ms) {
                 // Check if in IDLE or PAUSED state (sleep-eligible states)
-                auto state = g_stateMachine->getState();
                 bool sleep_eligible = (state == TimerStateMachine::State::IDLE ||
                                        state == TimerStateMachine::State::PAUSED);
 
@@ -245,6 +251,11 @@ void uiTask(void* parameter) {
 
                         // Save state to RTC memory
                         SleepState::save(*g_stateMachine, *g_sequence, led_pattern);
+
+                        // Stop vibration motor — AXP192 LDO3 stays powered through ESP32
+                        // deep sleep, so without this the motor keeps buzzing until battery
+                        // dies if sleep is entered mid-pattern.
+                        M5.Power.Axp192.setLDO3(0);
 
                         // Power down LEDs (clear + disable 5V boost)
                         g_ledController->powerDown();
