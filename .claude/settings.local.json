@@ -30,7 +30,8 @@
       "WebFetch(domain:registry.platformio.org)",
       "WebFetch(domain:raw.githubusercontent.com)",
       "mcp__context7__get-library-docs",
-      "mcp__lab-youtrack__log_work"
+      "mcp__lab-youtrack__log_work",
+      "Bash(python -m pip install:*)"
     ],
     "deny": [],
     "ask": []
