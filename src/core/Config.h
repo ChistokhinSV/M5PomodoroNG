@@ -54,7 +54,7 @@ public:
 
     // Power management
     struct PowerSettings {
-        bool auto_sleep_enabled = false;       // DISABLED: MP-80 - Use deep sleep only (dual-core issue)
+        bool auto_sleep_enabled = false;       // Off by default; enable via Settings (uses light sleep, touch-wake)
         uint16_t sleep_after_min = 5;          // Minutes of inactivity (short for testing)
         bool wake_on_rotation = true;
         bool sleep_on_dc_power = true;         // Sleep even when charging (default: true)

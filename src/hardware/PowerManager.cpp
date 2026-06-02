@@ -1,6 +1,5 @@
 #include "PowerManager.h"
 #include <Arduino.h>
-#include "esp_task_wdt.h"
 
 PowerManager::PowerManager()
     : current_brightness(80),
@@ -61,18 +60,15 @@ void PowerManager::enterLightSleep(uint32_t duration_ms) {
 
     current_sleep_mode = SleepMode::LIGHT;
 
-    // Disable task watchdog for this task (prevents reset during long sleep)
-    esp_task_wdt_delete(NULL);
-
-    // Configure wake sources
-    esp_sleep_enable_timer_wakeup(duration_ms * 1000);  // microseconds
-    configureTouchWake();  // Touch screen wake
-
-    // Light sleep (CPU stops, RAM retained)
-    esp_light_sleep_start();
-
-    // Re-enable task watchdog after wake
-    esp_task_wdt_add(NULL);
+    // No need to touch the task watchdog: the CPU is paused during light sleep so the
+    // WDT cannot tick, and UITask is not subscribed in the first place. A previous
+    // esp_task_wdt_add(NULL) here ended up subscribing the task after wake without
+    // adding the matching esp_task_wdt_reset() calls, causing a WDT abort ~5s later.
+    //
+    // M5Unified configures the correct touch-INT pin (GPIO 39 on M5Core2) for EXT0 wake
+    // and sets the timer source. micro_seconds=0 means "wake on touch only".
+    uint64_t micros = static_cast<uint64_t>(duration_ms) * 1000ULL;
+    M5.Power.lightSleep(micros, true);
 
     current_sleep_mode = SleepMode::NONE;
     Serial.println("[PowerManager] Woke from light sleep");
@@ -84,14 +80,13 @@ void PowerManager::enterDeepSleep(uint32_t duration_sec) {
 
     current_sleep_mode = SleepMode::DEEP;
 
-    // Configure wake sources
-    if (duration_sec > 0) {
-        esp_sleep_enable_timer_wakeup(duration_sec * 1000000ULL);  // microseconds
-    }
-    configureTouchWake();  // Touch screen wake
-
-    // Deep sleep (only RTC active, reset on wake)
-    M5.Power.deepSleep(duration_sec);
+    // Let M5Unified handle wake setup. On M5Core2 it enables EXT0 on GPIO 39 (touch INT)
+    // and the timer source if requested. Doing it ourselves earlier was wrong: we set
+    // EXT0 on GPIO 4, which M5Unified overrode anyway, and the only side-effect of our
+    // setup was a stray gpio_deep_sleep_hold_en() that could latch unrelated pins.
+    // Power-button wake is not supported here (M5.Power.deepSleep uses EXT0, single pin).
+    uint64_t micros = static_cast<uint64_t>(duration_sec) * 1000000ULL;
+    M5.Power.deepSleep(micros, true);
 
     // This code never executes (ESP32 resets after deep sleep wake)
 }
@@ -164,25 +159,6 @@ bool PowerManager::isLowBattery() const {
 
 bool PowerManager::isCriticalBattery() const {
     return getBatteryLevel() <= 5 && !isCharging();
-}
-
-void PowerManager::configureTouchWake() {
-    // M5Core2 capacitive touch interrupt is on GPIO4
-    // Configure as EXT0 wake source (low level = touched)
-    // Note: M5Core2 touch controller pulls GPIO4 LOW when touched
-
-    const int TOUCH_INT_PIN = 4;  // GPIO4 - touch interrupt
-
-    // Configure GPIO4 as input with pull-up (ensures reliable interrupt detection)
-    pinMode(TOUCH_INT_PIN, INPUT_PULLUP);
-
-    // Hold GPIO configuration during sleep (prevents config reset)
-    gpio_deep_sleep_hold_en();
-
-    // Enable EXT0 wake on GPIO4 (wake on LOW level)
-    esp_sleep_enable_ext0_wakeup(static_cast<gpio_num_t>(TOUCH_INT_PIN), 0);  // 0 = LOW
-
-    Serial.println("[PowerManager] Touch wake configured (GPIO4, active LOW, pull-up enabled)");
 }
 
 void PowerManager::printStatus() const {

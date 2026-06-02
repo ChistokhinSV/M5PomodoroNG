@@ -6,7 +6,6 @@
 #include "../hardware/IAudioPlayer.h"
 #include "../core/TimeManager.h"
 #include "../core/Config.h"
-#include "../core/SleepState.h"
 #include "../hardware/IPowerManager.h"
 
 /**
@@ -238,33 +237,47 @@ void uiTask(void* parameter) {
                     bool skip_sleep = is_charging && !power_settings.sleep_on_dc_power;
 
                     if (!skip_sleep) {
-                        // MP-80: Use deep sleep only (light sleep has FreeRTOS dual-core issues)
-                        Serial.printf("[UITask] Idle %lu min - entering DEEP SLEEP\n", g_idleDuration / 60000);
+                        // Use light sleep instead of deep sleep: touch wake on M5Core2 deep
+                        // sleep is unreliable (community-known issue with EXT0 + AXP192/AXP2101).
+                        // Light sleep preserves RAM, returns from esp_light_sleep_start(), and
+                        // its touch wake is reliable. NetworkTask on Core 1 sits in
+                        // vTaskDelay(1000) so Core 1 idles between heartbeats — both cores
+                        // can enter sleep together.
+                        Serial.printf("[UITask] Idle %lu min - entering LIGHT SLEEP\n", g_idleDuration / 60000);
 
-                        // Save current LED pattern for restoration
-                        ILEDController::TimerState led_pattern = ILEDController::TimerState::IDLE;
-                        if (state == TimerStateMachine::State::IDLE) {
-                            led_pattern = ILEDController::TimerState::WARNING;  // Yellow flash mode
-                        } else if (state == TimerStateMachine::State::PAUSED) {
-                            led_pattern = ILEDController::TimerState::PAUSED;  // Red blink
-                        }
-
-                        // Save state to RTC memory
-                        SleepState::save(*g_stateMachine, *g_sequence, led_pattern);
-
-                        // Stop vibration motor — AXP192 LDO3 stays powered through ESP32
-                        // deep sleep, so without this the motor keeps buzzing until battery
-                        // dies if sleep is entered mid-pattern.
+                        // Stop vibration motor so it doesn't keep buzzing while asleep
+                        // (AXP LDO3 stays powered through ESP32 light sleep).
                         M5.Power.Axp192.setLDO3(0);
 
                         // Power down LEDs (clear + disable 5V boost)
                         g_ledController->powerDown();
-                        delay(100);  // Wait for power to stabilize
 
-                        // Enter deep sleep (device will reset on wake)
-                        g_powerManager->enterDeepSleep(0);  // Infinite sleep, wake on touch
+                        // Turn the LCD backlight off so the screen goes dark while asleep
+                        M5.Display.sleep();
 
-                        // Note: Code never reaches here (ESP32 resets on wake)
+                        delay(50);  // Let display/LED state settle before sleep entry
+
+                        // Block here until touch wake (duration_ms = 0 means "touch only")
+                        g_powerManager->enterLightSleep(0);
+
+                        // ---- Resumed from light sleep ----
+                        Serial.println("[UITask] Woke from light sleep — restoring display/LEDs");
+                        M5.Display.wakeup();
+                        M5.Display.setBrightness(map(g_powerManager->getBrightness(), 0, 100, 0, 255));
+
+                        // Re-enable LED bar 5V boost (powerDown disabled it)
+                        M5.Power.setExtOutput(true);
+
+                        // Snap all frame-pacing cursors to "now" so the next frame's deltaMs
+                        // is ~33ms instead of the full sleep duration. Without this, animations
+                        // driven by deltaMs (e.g. SequenceIndicator pulse) jump thousands of
+                        // degrees and slowly unwind — visible as a huge circle around the
+                        // current breadcrumb dot that takes minutes to shrink back to normal.
+                        uint32_t wake_now = millis();
+                        g_lastUpdate = wake_now;
+                        g_lastSecond = wake_now;
+                        g_lastTaskMonitor = wake_now;
+                        g_lastInteraction = wake_now;  // Treat the wake-up touch as user interaction
                     } else {
                         Serial.println("[UITask] Charging detected - skip sleep (DC power = OFF)");
                         g_lastInteraction = millis();  // Reset to prevent repeated log spam

@@ -60,9 +60,6 @@ private:
     uint8_t current_brightness = 80;
     SleepMode current_sleep_mode = SleepMode::NONE;
 
-    // Sleep wake configuration
-    void configureTouchWake();  // Configure touch pad wake (GPIO4 for M5Core2)
-
     // Battery voltage to percentage conversion (LiPo curve)
     uint8_t voltageToPercent(float voltage) const;
 };
