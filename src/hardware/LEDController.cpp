@@ -195,10 +195,20 @@ void LEDController::triggerMilestone(uint32_t duration_ms) {
         saved_pattern = current_pattern;
         saved_color = pattern_color;
 
+        // Wipe both buffers so confetti starts on a clean black background. Without
+        // this, updateConfetti() runs fadeToBlackBy(10) on whatever the previous
+        // pattern (work pulse, break pulse, etc.) left in fastled_array, and that
+        // residue dominates the visual for the ~600 ms it takes to fade — visible
+        // as a "wrong color" wash for the first few seconds of confetti.
+        clear();
+        show();
+
         // Set pattern BEFORE activating milestone flag (otherwise setPattern rejects it!)
         current_pattern = Pattern::CONFETTI;
         animation_step = 0;
-        last_update_ms = millis();
+        // Backdate last_update_ms so the very next update() tick runs updateConfetti
+        // instead of waiting another 30 ms (during which leftover frame data shows).
+        last_update_ms = millis() - 30;
 
         // Now activate milestone protection
         milestone_active = true;
