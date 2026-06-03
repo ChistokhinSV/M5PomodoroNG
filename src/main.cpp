@@ -323,6 +323,12 @@ void setup() {
     g_sequence->setWorkDuration(pomodoro_config.work_duration_min);
     g_sequence->setShortBreakDuration(pomodoro_config.short_break_min);
     g_sequence->setLongBreakDuration(pomodoro_config.long_break_min);
+
+    // Open the sequence's NVS namespace and restore (current_session, completed_today)
+    // so the breadcrumb survives reboot/flash. Must run AFTER the setters above so
+    // deserialize() can validate the saved session against the current cycle length.
+    g_sequence->begin();
+
     Serial.println("[OK] State machine and sequence initialized");
 
     // Register audio callback for state machine events

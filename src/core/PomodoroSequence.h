@@ -2,6 +2,7 @@
 #define POMODORO_SEQUENCE_H
 
 #include <cstdint>
+#include <Preferences.h>
 
 /**
  * Pomodoro sequence tracking and logic
@@ -36,6 +37,12 @@ public:
 
     PomodoroSequence();
 
+    // NVS persistence — open the namespace, load any previously saved
+    // (current_session, completed_today) so the breadcrumb position survives
+    // reboot/flash. Call AFTER configuration setters so deserialize() can
+    // validate against the current cycle length.
+    bool begin();
+
     // Configuration (durations and cycle settings)
     void setWorkDuration(uint16_t minutes);
     void setShortBreakDuration(uint16_t minutes);
@@ -57,7 +64,7 @@ public:
     uint8_t getCurrentCycle() const;           // Current cycle number (1-based, calculated from current_session)
     uint8_t getSessionsBeforeLong() const;     // Sessions per cycle (custom_sessions_before_long)
     uint8_t getCompletedToday() const { return completed_today; }
-    void setCompletedToday(uint8_t count) { completed_today = count; }  // For state restoration
+    void setCompletedToday(uint8_t count);  // For state restoration
     bool isWorkSession() const;
     bool isBreakSession() const;
     bool isLongBreak() const;
@@ -70,7 +77,7 @@ public:
 
     // Daily reset (call at midnight)
     void resetDailyCounter();
-    void incrementCompletedToday() { completed_today++; }
+    void incrementCompletedToday();
 
     // Serialization for NVS storage
     uint32_t serialize() const;
@@ -90,6 +97,12 @@ private:
 
     SessionType getSessionType(uint8_t session_num) const;
     uint16_t getSessionDuration(SessionType type) const;
+
+    // NVS persistence backing — opened by begin(), written by save() after any
+    // state mutation. Namespace short enough to fit NVS 15-char key limit.
+    Preferences nvs_prefs_;
+    bool nvs_ready_ = false;
+    void save();
 };
 
 #endif // POMODORO_SEQUENCE_H

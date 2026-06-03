@@ -11,6 +11,35 @@ PomodoroSequence::PomodoroSequence()
       custom_sessions_before_long(4) {
 }
 
+bool PomodoroSequence::begin() {
+    // Open a dedicated NVS namespace for sequence state. Separate from Config /
+    // Statistics so wiping one doesn't lose the others.
+    if (!nvs_prefs_.begin("pom_seq", false)) {
+        Serial.println("[PomodoroSequence] WARN: NVS open failed; session count won't persist");
+        return false;
+    }
+    nvs_ready_ = true;
+
+    uint32_t saved = nvs_prefs_.getULong("state", 0);
+    if (saved == 0) {
+        Serial.println("[PomodoroSequence] No saved state, starting at session 1");
+        return true;
+    }
+
+    // deserialize() validates against the currently-configured cycle length
+    // and silently resets current_session to 1 if it's out of range — handles
+    // the case where the user changed mode (Classic→Study) since last save.
+    deserialize(saved);
+    Serial.printf("[PomodoroSequence] Restored from NVS: session=%d, completed_today=%d\n",
+                  current_session, completed_today);
+    return true;
+}
+
+void PomodoroSequence::save() {
+    if (!nvs_ready_) return;
+    nvs_prefs_.putULong("state", serialize());
+}
+
 void PomodoroSequence::setWorkDuration(uint16_t minutes) {
     custom_work_min = minutes;
 }
@@ -34,11 +63,13 @@ void PomodoroSequence::setNumCycles(uint8_t cycles) {
 void PomodoroSequence::start() {
     sequence_start_epoch = millis() / 1000;  // Approximate epoch (seconds since boot)
     current_session = 1;
+    save();
 }
 
 void PomodoroSequence::reset() {
     current_session = 1;
     sequence_start_epoch = 0;
+    save();
 }
 
 PomodoroSequence::Session PomodoroSequence::getCurrentSession() const {
@@ -78,6 +109,7 @@ bool PomodoroSequence::advance() {
         Serial.println("[PomodoroSequence] Cycle completed! Starting new cycle");
     }
 
+    save();
     return cycle_completed;
 }
 
@@ -122,6 +154,17 @@ void PomodoroSequence::setCurrentSession(uint8_t session) {
     uint8_t total = getTotalIntervals();
     current_session = constrain(session, 1, total);
     Serial.printf("[PomodoroSequence] Session restored to %d (of %d)\n", current_session, total);
+    save();
+}
+
+void PomodoroSequence::setCompletedToday(uint8_t count) {
+    completed_today = count;
+    save();
+}
+
+void PomodoroSequence::incrementCompletedToday() {
+    completed_today++;
+    save();
 }
 
 bool PomodoroSequence::isNextLongBreak() const {
@@ -161,6 +204,7 @@ bool PomodoroSequence::isLongBreak() const {
 
 void PomodoroSequence::resetDailyCounter() {
     completed_today = 0;
+    save();
 }
 
 uint32_t PomodoroSequence::serialize() const {
