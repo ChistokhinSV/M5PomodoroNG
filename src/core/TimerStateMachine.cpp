@@ -102,6 +102,24 @@ bool TimerStateMachine::handleEvent(Event event) {
                     haptic_controller->trigger(IHapticController::Pattern::TIMER_COMPLETE);
                 }
 
+                // Announce the new session with audio at the transition itself.
+                // Without this the work→rest / rest→work moment was haptic-only in
+                // manual mode (the existing enterState(ACTIVE) audio only fires
+                // when the user actually starts the next session). Audio also still
+                // plays at enterState(ACTIVE) so pressing Start gives feedback;
+                // auto-start mode hears the same sound twice in quick succession,
+                // which is fine — the second is short and confirms the start.
+                if (audio_callback) {
+                    auto next_type = sequence.getCurrentSession().type;
+                    if (next_type == PomodoroSequence::SessionType::WORK) {
+                        audio_callback("work_start");
+                    } else if (next_type == PomodoroSequence::SessionType::SHORT_BREAK) {
+                        audio_callback("rest_start");
+                    } else if (next_type == PomodoroSequence::SessionType::LONG_BREAK) {
+                        audio_callback("long_rest_start");
+                    }
+                }
+
                 // Trigger confetti if we're entering a long break
                 if (led_controller && entering_long_break) {
                     // Trigger 10-second confetti celebration
@@ -336,7 +354,9 @@ void TimerStateMachine::enterState(State new_state) {
                 }
             }
 
-            // Trigger audio based on session type
+            // Trigger audio based on session type — fires when the user actually
+            // starts the session (manual press or auto-start). TIMEOUT also plays
+            // a transition announcement, which is intentional.
             if (audio_callback) {
                 auto session_type = sequence.getCurrentSession().type;
                 if (session_type == PomodoroSequence::SessionType::WORK) {
