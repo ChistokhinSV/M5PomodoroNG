@@ -352,12 +352,14 @@ void LEDController::updateConfetti() {
     // Pick random LED and add random colored sparkle
     uint8_t pos = random16(LED_COUNT);
 
-    // Increment base hue for color variation over time
-    animation_step = (animation_step + 1) % 256;
-
-    // Add sparkle with random hue variation (±64 hue units)
-    // High saturation (200) and full brightness (255) for vibrant colors
-    fastled_array[pos] += CHSV(animation_step + random8(64), 200, 255);
+    // Pick a truly random hue across the full spectrum for each spark. The
+    // previous implementation slid animation_step by 1 per frame and added
+    // random8(64), so the first few seconds were locked into a narrow ~64-hue
+    // window (red→yellow at the very start, then yellow→green a second later)
+    // until the cycle wrapped around — visible as "first few seconds all one
+    // colour" before things became actually colourful.
+    animation_step = (animation_step + 1) % 256;  // kept for the debug log below
+    fastled_array[pos] += CHSV(random8(), 200, 255);
 
     // Apply dual brightness system (user × power mode)
     uint16_t effective_brightness = (brightness * power_mode_multiplier) / 100;
