@@ -2,6 +2,8 @@
 #include "../hardware/SDManager.h"
 #include <Arduino.h>
 #include <time.h>
+#include <stdlib.h>   // setenv
+#include <stdio.h>    // snprintf
 
 // External global pointer (defined in main.cpp)
 extern SDManager* g_sdManager;
@@ -24,18 +26,39 @@ TimeManager::~TimeManager() {
     }
 }
 
-bool TimeManager::begin(int32_t utc_offset, SDManager* sd) {
-    utc_offset_sec = utc_offset;
+bool TimeManager::begin(const char* tz_spec, SDManager* sd) {
+    // Install the POSIX TZ globally — newlib's mktime / localtime_r read it.
+    // With this set, RTC timestamps treated as local time round-trip correctly
+    // including any DST window encoded in the rules.
+    setenv("TZ", tz_spec ? tz_spec : "UTC0", 1);
+    tzset();
 
-    // Initialize NTPClient with UDP (for future NTP sync)
-    ntp_client = new NTPClient(udp, NTP_SERVER, utc_offset_sec, SYNC_INTERVAL_MS);
+    // Snapshot the current local-UTC offset for getUTCOffset() callers.
+    // Newlib here lacks tm_gmtoff, so use the portable gmtime+mktime trick:
+    // gmtime fills components in UTC, mktime reinterprets them as local and
+    // returns a UTC epoch — the delta is the active TZ offset (east-positive).
+    {
+        time_t now_t = time(nullptr);
+        struct tm gm_tm;
+        gmtime_r(&now_t, &gm_tm);
+        gm_tm.tm_isdst = -1;
+        time_t gm_as_local = mktime(&gm_tm);
+        utc_offset_sec = (gm_as_local != -1)
+            ? static_cast<int32_t>(now_t - gm_as_local)
+            : 0;
+    }
 
+    // NTPClient uses its offset only for its own getFormattedTime() helpers —
+    // we only consume getEpochTime() (UTC), so passing 0 here is safe and
+    // avoids it drifting if TZ changes.
+    ntp_client = new NTPClient(udp, NTP_SERVER, 0, SYNC_INTERVAL_MS);
     if (!ntp_client) {
         Serial.println("[TimeManager] ERROR: Failed to create NTP client");
         return false;
     }
 
-    Serial.printf("[TimeManager] Initialized (UTC offset: %ld seconds)\n", utc_offset_sec);
+    Serial.printf("[TimeManager] Initialized (TZ=\"%s\", current offset %+ld sec)\n",
+                  tz_spec ? tz_spec : "UTC0", utc_offset_sec);
 
     // RTC-first strategy: Try to load time from M5.Rtc
     if (loadTimeFromRTC()) {
@@ -67,6 +90,21 @@ bool TimeManager::begin(int32_t utc_offset, SDManager* sd) {
 
     Serial.println("[TimeManager] ERROR: Failed to initialize time");
     return false;
+}
+
+bool TimeManager::begin(int32_t utc_offset, SDManager* sd) {
+    // Legacy entry point. Synthesize a POSIX TZ string with the inverted sign
+    // and no DST, then defer to the TZ-aware overload.
+    int posix_total_min = -(utc_offset / 60);
+    int hh = posix_total_min / 60;
+    int mm = posix_total_min >= 0 ? (posix_total_min % 60) : (-posix_total_min % 60);
+    char tz_buf[32];
+    if (mm == 0) {
+        snprintf(tz_buf, sizeof(tz_buf), "LOC%d", hh);
+    } else {
+        snprintf(tz_buf, sizeof(tz_buf), "LOC%d:%02d", hh, mm);
+    }
+    return begin(static_cast<const char*>(tz_buf), sd);
 }
 
 bool TimeManager::syncNow() {
@@ -272,46 +310,40 @@ bool TimeManager::isRTCValid() const {
 }
 
 uint32_t TimeManager::rtcToEpoch() const {
+    // RTC holds wall-clock time. With TZ set via setenv (in begin()), mktime
+    // interprets its struct tm as local time and returns the corresponding
+    // UTC epoch — DST is applied automatically when tm_isdst = -1.
     auto dt = M5.Rtc.getDateTime();
 
-    // Convert to struct tm
     struct tm timeinfo = {};
-    timeinfo.tm_year = dt.date.year - 1900;   // Years since 1900
-    timeinfo.tm_mon = dt.date.month - 1;       // 0-11
-    timeinfo.tm_mday = dt.date.date;           // 1-31
-    timeinfo.tm_hour = dt.time.hours;          // 0-23
-    timeinfo.tm_min = dt.time.minutes;         // 0-59
-    timeinfo.tm_sec = dt.time.seconds;         // 0-59
-    timeinfo.tm_isdst = -1;                    // Let mktime determine DST
+    timeinfo.tm_year = dt.date.year - 1900;
+    timeinfo.tm_mon  = dt.date.month - 1;
+    timeinfo.tm_mday = dt.date.date;
+    timeinfo.tm_hour = dt.time.hours;
+    timeinfo.tm_min  = dt.time.minutes;
+    timeinfo.tm_sec  = dt.time.seconds;
+    timeinfo.tm_isdst = -1;
 
-    // Convert to Unix epoch (apply UTC offset)
     time_t epoch = mktime(&timeinfo);
     if (epoch == -1) {
         Serial.println("[TimeManager] ERROR: Failed to convert RTC to epoch");
         return 0;
     }
-
-    // mktime assumes local time, so subtract UTC offset to get true UTC epoch
-    epoch -= utc_offset_sec;
-
-    return (uint32_t)epoch;
+    return static_cast<uint32_t>(epoch);
 }
 
 void TimeManager::epochToRTC(uint32_t epoch, m5::rtc_datetime_t& dt) const {
-    // Add UTC offset to get local time
-    time_t local_epoch = epoch + utc_offset_sec;
-
-    // Convert epoch to struct tm
+    // Render the UTC epoch as local wall-clock time via the active TZ.
+    // localtime_r picks up DST from the POSIX TZ rules installed in begin().
+    time_t raw = epoch;
     struct tm timeinfo;
-    gmtime_r(&local_epoch, &timeinfo);
+    localtime_r(&raw, &timeinfo);
 
-    // Fill RTC datetime struct
-    dt.date.year = timeinfo.tm_year + 1900;
-    dt.date.month = timeinfo.tm_mon + 1;
-    dt.date.date = timeinfo.tm_mday;
+    dt.date.year    = timeinfo.tm_year + 1900;
+    dt.date.month   = timeinfo.tm_mon + 1;
+    dt.date.date    = timeinfo.tm_mday;
     dt.date.weekDay = timeinfo.tm_wday;
-
-    dt.time.hours = timeinfo.tm_hour;
+    dt.time.hours   = timeinfo.tm_hour;
     dt.time.minutes = timeinfo.tm_min;
     dt.time.seconds = timeinfo.tm_sec;
 }

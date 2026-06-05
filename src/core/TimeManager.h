@@ -38,8 +38,13 @@ public:
     TimeManager();
     ~TimeManager();
 
-    // Initialize with timezone offset (seconds from UTC)
-    // Loads time from M5.Rtc, validates, falls back to SD/default if invalid
+    // Initialize with a POSIX TZ string (e.g. "CET-1CEST,M3.5.0,M10.5.0/3" or
+    // "UTC0"). Sets the process TZ env so localtime_r / mktime do the right
+    // thing — including automatic DST when the rules are encoded. Loads time
+    // from M5.Rtc, validates, falls back to SD/default if invalid.
+    bool begin(const char* tz_spec, SDManager* sd = nullptr);
+    // Legacy overload: kept for callers that still pass a raw seconds offset.
+    // Synthesizes a POSIX TZ string with no DST and forwards.
     bool begin(int32_t utc_offset_sec = 0, SDManager* sd = nullptr);
 
     // NTP synchronization (updates M5.Rtc)

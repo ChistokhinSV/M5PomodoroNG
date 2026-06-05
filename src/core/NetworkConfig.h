@@ -76,10 +76,20 @@ public:
 
     /**
      * NTP time synchronization settings
+     *
+     * Timezone resolution precedence (computed once at load() time into
+     * resolved_tz, a POSIX TZ string suitable for setenv("TZ", ...)):
+     *   1. TimezoneOffset set explicitly → fixed offset (+ EU DST rules if DST=true)
+     *   2. Timezone set → IANA name lookup, else used as-is (assumed POSIX TZ)
+     *   3. Neither set → "UTC0"
      */
     struct NTPSettings {
         char server[64] = "pool.ntp.org";     // NTP server hostname
-        int32_t timezone_offset = 0;          // Timezone offset in seconds from UTC
+        int32_t timezone_offset = 0;          // Legacy: fixed seconds from UTC
+        bool timezone_offset_set = false;     // True if TimezoneOffset key present in INI
+        char timezone_name[64] = "";          // IANA name (e.g. Europe/London) or raw POSIX TZ
+        bool dst_enabled = false;             // Apply auto-DST atop TimezoneOffset (EU rules)
+        char resolved_tz[64] = "UTC0";        // Final POSIX TZ string passed to setenv
     };
 
     /**
@@ -184,6 +194,14 @@ private:
     bool loadCertFile(const char* path, char** buffer, size_t max_size);
     bool validatePEMFormat(const char* content, const char* expected_header);
     void freeBuffers();
+
+    // Resolve [NTP] timezone keys into a POSIX TZ string in ntp.resolved_tz.
+    // TimezoneOffset wins over Timezone if both are present. With DST=true,
+    // a fixed offset gets EU DST rules (last Sun of Mar -> last Sun of Oct).
+    void resolveTZ();
+    // Look up an IANA-style name (e.g. "Europe/London") in the built-in
+    // table and return its POSIX TZ string, or nullptr if not found.
+    static const char* mapIanaToPosix(const char* iana_name);
 };
 
 #endif // NETWORK_CONFIG_H

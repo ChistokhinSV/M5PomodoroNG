@@ -93,8 +93,23 @@ Password=MySecurePassword123
 
 [NTP]
 Server=pool.ntp.org
-TimezoneOffset=-18000  # EST (UTC-5)
+# Pick ONE of the next two. TimezoneOffset wins if both are set.
+# (a) Named zone — DST handled automatically:
+Timezone=America/New_York
+# (b) Fixed offset (seconds from UTC). Set DST=true to apply EU-style
+#     auto-DST (last Sun Mar -> last Sun Oct) on top of the offset.
+#TimezoneOffset=-18000
+#DST=false
 ```
+
+**Timezone options**:
+- `Timezone=` accepts an IANA name from the built-in table
+  (e.g. `Europe/London`, `America/Los_Angeles`, `Asia/Tokyo`,
+  `Australia/Sydney`, `Pacific/Auckland` — see `network.ini` for
+  the full list) or a raw POSIX TZ string. DST rules are baked
+  into named zones, so spring/autumn transitions are automatic.
+- `TimezoneOffset=` is the legacy fixed-offset path. Combine with
+  `DST=true` for automatic summer-time shift using EU rules.
 
 ### 4. (Optional) Setup SSL Certificates
 

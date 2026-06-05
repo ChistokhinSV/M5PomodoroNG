@@ -117,7 +117,22 @@ bool NetworkConfig::loadIniFile() {
         ntp.server[sizeof(ntp.server) - 1] = '\0';
     }
 
-    ntp.timezone_offset = ini.geti("NTP", "TimezoneOffset", 0);
+    // TimezoneOffset is read as string so we can distinguish "missing" (use
+    // Timezone instead) from "= 0" (explicit UTC fixed offset).
+    String tz_offset_str = ini.gets("NTP", "TimezoneOffset", "");
+    ntp.timezone_offset_set = tz_offset_str.length() > 0;
+    ntp.timezone_offset = ntp.timezone_offset_set ? tz_offset_str.toInt() : 0;
+
+    String tz_name = ini.gets("NTP", "Timezone", "");
+    if (tz_name.length() > 0) {
+        strncpy(ntp.timezone_name, tz_name.c_str(), sizeof(ntp.timezone_name) - 1);
+        ntp.timezone_name[sizeof(ntp.timezone_name) - 1] = '\0';
+    }
+
+    ntp.dst_enabled = ini.getbool("NTP", "DST", false);
+
+    // Pick which input wins, build the POSIX TZ string for setenv("TZ", ...).
+    resolveTZ();
 
     // Validate required settings
     if (strlen(wifi.ssid) == 0) {
@@ -134,8 +149,8 @@ bool NetworkConfig::loadIniFile() {
     Serial.printf("[NetworkConfig] CloudSync: %s (interval: %d min)\n",
                   cloud_sync.enabled ? "enabled" : "disabled",
                   cloud_sync.sync_interval_min);
-    Serial.printf("[NetworkConfig] NTP: %s (offset: %ld sec)\n",
-                  ntp.server, ntp.timezone_offset);
+    Serial.printf("[NetworkConfig] NTP: %s (TZ=\"%s\")\n",
+                  ntp.server, ntp.resolved_tz);
 
     return true;
 }
@@ -287,4 +302,113 @@ void NetworkConfig::freeBuffers() {
 
     certs_loaded = false;
     Serial.println("[NetworkConfig] Certificate buffers freed");
+}
+
+// --- Timezone resolution -----------------------------------------------------
+
+namespace {
+// IANA name -> POSIX TZ. POSIX sign convention is WEST-of-UTC positive, so
+// CET (UTC+1) is "CET-1" and EST (UTC-5) is "EST5". DST rules are encoded as
+// Mmonth.week.day[/hour]. Built-in pool covers the common cases; users with
+// exotic zones can paste a POSIX TZ string directly into Timezone= instead.
+struct IanaEntry { const char* iana; const char* posix; };
+constexpr IanaEntry IANA_TABLE[] = {
+    {"UTC",                 "UTC0"},
+    {"GMT",                 "GMT0"},
+    {"Europe/London",       "GMT0BST,M3.5.0/1,M10.5.0/2"},
+    {"Europe/Dublin",       "GMT0IST,M3.5.0/1,M10.5.0/2"},
+    {"Europe/Lisbon",       "WET0WEST,M3.5.0/1,M10.5.0/2"},
+    {"Europe/Berlin",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Paris",        "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Madrid",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Rome",         "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Amsterdam",    "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Brussels",     "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Vienna",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Warsaw",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Prague",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Stockholm",    "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Helsinki",     "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Athens",       "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Bucharest",    "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Kiev",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Kyiv",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Riga",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Tallinn",      "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Vilnius",      "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Moscow",       "MSK-3"},
+    {"Europe/Istanbul",     "TRT-3"},
+    {"America/New_York",    "EST5EDT,M3.2.0,M11.1.0"},
+    {"America/Chicago",     "CST6CDT,M3.2.0,M11.1.0"},
+    {"America/Denver",      "MST7MDT,M3.2.0,M11.1.0"},
+    {"America/Phoenix",     "MST7"},
+    {"America/Los_Angeles", "PST8PDT,M3.2.0,M11.1.0"},
+    {"America/Anchorage",   "AKST9AKDT,M3.2.0,M11.1.0"},
+    {"America/Honolulu",    "HST10"},
+    {"America/Toronto",     "EST5EDT,M3.2.0,M11.1.0"},
+    {"America/Vancouver",   "PST8PDT,M3.2.0,M11.1.0"},
+    {"America/Mexico_City", "CST6CDT,M4.1.0,M10.5.0"},
+    {"America/Sao_Paulo",   "BRT3"},
+    {"America/Buenos_Aires","ART3"},
+    {"Asia/Tokyo",          "JST-9"},
+    {"Asia/Shanghai",       "CST-8"},
+    {"Asia/Hong_Kong",      "HKT-8"},
+    {"Asia/Singapore",      "SGT-8"},
+    {"Asia/Seoul",          "KST-9"},
+    {"Asia/Bangkok",        "ICT-7"},
+    {"Asia/Kolkata",        "IST-5:30"},
+    {"Asia/Dubai",          "GST-4"},
+    {"Asia/Jerusalem",      "IST-2IDT,M3.4.4/26,M10.5.0"},
+    {"Australia/Sydney",    "AEST-10AEDT,M10.1.0,M4.1.0/3"},
+    {"Australia/Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3"},
+    {"Australia/Brisbane",  "AEST-10"},
+    {"Australia/Perth",     "AWST-8"},
+    {"Australia/Adelaide",  "ACST-9:30ACDT,M10.1.0,M4.1.0/3"},
+    {"Pacific/Auckland",    "NZST-12NZDT,M9.5.0,M4.1.0/3"},
+};
+}  // namespace
+
+const char* NetworkConfig::mapIanaToPosix(const char* iana_name) {
+    if (!iana_name) return nullptr;
+    for (const auto& e : IANA_TABLE) {
+        if (strcmp(e.iana, iana_name) == 0) return e.posix;
+    }
+    return nullptr;
+}
+
+void NetworkConfig::resolveTZ() {
+    if (ntp.timezone_offset_set) {
+        // Manual offset wins. POSIX TZ sign is INVERTED (west-positive), so
+        // UTC+1 (3600s east) becomes "LOC-1" and UTC-5 (-18000s) becomes "LOC5".
+        int posix_total_min = -(ntp.timezone_offset / 60);
+        int hh = posix_total_min / 60;
+        int mm = posix_total_min >= 0 ? (posix_total_min % 60) : (-posix_total_min % 60);
+
+        char std_tail[24];
+        if (mm == 0) {
+            snprintf(std_tail, sizeof(std_tail), "%d", hh);
+        } else {
+            snprintf(std_tail, sizeof(std_tail), "%d:%02d", hh, mm);
+        }
+
+        if (ntp.dst_enabled) {
+            // EU default DST: last Sun of Mar at 02:00 → last Sun of Oct at 03:00.
+            // POSIX assumes 1-hour DST shift by default (no offset after DST name).
+            snprintf(ntp.resolved_tz, sizeof(ntp.resolved_tz),
+                     "LOC%sDST,M3.5.0/2,M10.5.0/3", std_tail);
+        } else {
+            snprintf(ntp.resolved_tz, sizeof(ntp.resolved_tz), "LOC%s", std_tail);
+        }
+        return;
+    }
+
+    if (ntp.timezone_name[0] != '\0') {
+        const char* posix = mapIanaToPosix(ntp.timezone_name);
+        const char* src = posix ? posix : ntp.timezone_name;  // Treat unknown as raw POSIX
+        strncpy(ntp.resolved_tz, src, sizeof(ntp.resolved_tz) - 1);
+        ntp.resolved_tz[sizeof(ntp.resolved_tz) - 1] = '\0';
+        return;
+    }
+
+    strcpy(ntp.resolved_tz, "UTC0");
 }

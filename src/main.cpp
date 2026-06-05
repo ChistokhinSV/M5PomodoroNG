@@ -94,10 +94,8 @@ void backgroundNTPSyncTask(void* parameter) {
 
     // Get NTP settings from network.ini
     auto ntp_settings = g_networkConfig->getNTP();
-    Serial.printf("[Background NTP] NTP Server: %s, Timezone: UTC%+d:%02d\n",
-                  ntp_settings.server,
-                  ntp_settings.timezone_offset / 3600,
-                  (abs(ntp_settings.timezone_offset) % 3600) / 60);
+    Serial.printf("[Background NTP] NTP Server: %s, TZ=\"%s\"\n",
+                  ntp_settings.server, ntp_settings.resolved_tz);
 
     // Connect to WiFi (non-blocking startup)
     Serial.printf("[Background NTP] Connecting to WiFi: %s", wifi_settings.ssid);
@@ -223,13 +221,14 @@ void setup() {
     // Initialize TimeManager early (uses RTC, background task will sync NTP later)
     Serial.println("[TimeManager] Initializing from RTC...");
     g_timeManager = new TimeManager();
-    int32_t timezone_offset = 0;  // UTC default
+    // Resolved POSIX TZ string from NetworkConfig (Timezone= mapped, or
+    // TimezoneOffset+ optional DST synthesized, or "UTC0" by default).
+    const char* tz_spec = "UTC0";
     if (g_networkConfig) {
-        // Use timezone from network.ini if available
-        timezone_offset = g_networkConfig->getNTP().timezone_offset;
+        tz_spec = g_networkConfig->getNTP().resolved_tz;
     }
     // Pass SDManager pointer for emergency fallback (RTC → SD → Default)
-    if (!g_timeManager->begin(timezone_offset, g_sdManager)) {
+    if (!g_timeManager->begin(tz_spec, g_sdManager)) {
         Serial.println("[WARN] TimeManager initialization failed - using fallback time");
     } else {
         Serial.println("[OK] TimeManager initialized");

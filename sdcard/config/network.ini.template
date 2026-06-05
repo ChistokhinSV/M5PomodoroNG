@@ -1,0 +1,126 @@
+# M5 Pomodoro v2 - Network Configuration TEMPLATE
+#
+# Copy this file to /config/network.ini on your SD card and edit the
+# placeholders. The live network.ini is gitignored so your credentials
+# don't get committed.
+#
+# Lines starting with # are comments (ignored)
+
+[WiFi]
+# Your WiFi network credentials
+# REQUIRED: Edit these with your actual WiFi SSID and password
+SSID=YourWiFiSSID
+Password=YourWiFiPassword
+
+# Optional fallback network (if primary WiFi unavailable)
+# Uncomment and edit if you want a backup WiFi network
+#SSID_Fallback=MobileHotspot
+#Password_Fallback=FallbackPassword123
+
+[MQTT]
+# AWS IoT Core endpoint
+# Find at: AWS Console > IoT Core > Settings > Device data endpoint
+# Format: xxxxxxxxxxxxx-ats.iot.region.amazonaws.com
+# REQUIRED for cloud sync: Replace with your actual endpoint
+Broker=a3xxxxxxxxxx-ats.iot.us-east-1.amazonaws.com
+Port=8883
+
+# MQTT client ID (must be unique per device)
+# Recommendation: Use m5-pomodoro-<last 6 hex of MAC address>
+# You can find MAC address in serial monitor on boot
+# Example: If MAC is 11:22:33:44:A1:B2, use m5-pomodoro-A1B2C3
+ClientID=m5-pomodoro-XXXXXX
+
+# MQTT keep-alive interval in seconds
+KeepAlive=60
+
+[Certificates]
+# SSL/TLS certificate file paths (relative to SD card root)
+# These files MUST exist for secure AWS IoT connection
+# See config/certs/README.md for setup instructions
+RootCA=/config/certs/AmazonRootCA1.pem
+DeviceCert=/config/certs/device-certificate.pem.crt
+PrivateKey=/config/certs/device-private.pem.key
+
+[CloudSync]
+# Enable or disable AWS IoT Device Shadow synchronization
+# Set to false if you don't want cloud sync (device works offline)
+Enabled=true
+
+# Sync interval in minutes (how often to push statistics to cloud)
+# Recommendations:
+#   5 minutes = Performance mode (more frequent updates, more battery drain)
+#   10 minutes = Balanced mode
+#   30 minutes = Battery saver mode (less frequent updates, longer battery life)
+SyncIntervalMin=5
+
+[NTP]
+# NTP server for time synchronization
+# Used to update M5.Rtc (BM8563) when WiFi connects
+# Default pool.ntp.org works worldwide
+# You can use regional servers for faster sync:
+#   time.nist.gov (USA)
+#   time.google.com (Google)
+#   pool.ntp.org (worldwide)
+Server=pool.ntp.org
+
+# --- Timezone configuration ---
+# Two ways to set the clock; if both are provided, TimezoneOffset wins.
+#
+# 1) Timezone= (recommended for DST regions)
+#    IANA-style name from the built-in table (DST handled automatically):
+#      Europe/London, Europe/Dublin, Europe/Lisbon,
+#      Europe/Berlin, Europe/Paris, Europe/Madrid, Europe/Rome,
+#      Europe/Amsterdam, Europe/Brussels, Europe/Vienna, Europe/Warsaw,
+#      Europe/Prague, Europe/Stockholm,
+#      Europe/Helsinki, Europe/Athens, Europe/Bucharest,
+#      Europe/Kiev, Europe/Kyiv, Europe/Riga, Europe/Tallinn, Europe/Vilnius,
+#      Europe/Moscow, Europe/Istanbul,
+#      America/New_York, America/Chicago, America/Denver, America/Phoenix,
+#      America/Los_Angeles, America/Anchorage, America/Honolulu,
+#      America/Toronto, America/Vancouver, America/Mexico_City,
+#      America/Sao_Paulo, America/Buenos_Aires,
+#      Asia/Tokyo, Asia/Shanghai, Asia/Hong_Kong, Asia/Singapore,
+#      Asia/Seoul, Asia/Bangkok, Asia/Kolkata, Asia/Dubai, Asia/Jerusalem,
+#      Australia/Sydney, Australia/Melbourne, Australia/Brisbane,
+#      Australia/Perth, Australia/Adelaide,
+#      Pacific/Auckland
+#    A raw POSIX TZ string also works (e.g. "CET-1CEST,M3.5.0,M10.5.0/3").
+#    DST transitions are encoded in the rules, so they happen automatically.
+# Timezone=Europe/London
+
+# 2) TimezoneOffset= (legacy fixed offset, in seconds from UTC)
+#    Wins over Timezone= if both are present. Examples:
+#      0      = UTC
+#      3600   = UTC+1   -18000 = UTC-5 (EST)
+#      7200   = UTC+2   -21600 = UTC-6 (CST)
+#     19800   = UTC+5:30 (IST)
+#     32400   = UTC+9   (JST)
+TimezoneOffset=0
+
+# DST=true synthesizes EU-style DST (last Sun of Mar 02:00 -> last Sun of Oct
+# 03:00) on top of TimezoneOffset. Ignored when Timezone= (named or POSIX)
+# is used -- those already encode their own DST rules. Default: false.
+DST=false
+
+# ============================================================================
+# Phase 3 Features (Future) - Not Yet Implemented
+# ============================================================================
+# These sections are placeholders for future cloud service integrations
+# You can ignore them for now
+
+[Toggl]
+# Toggl time tracking integration (Phase 3 - not yet implemented)
+# When enabled, Pomodoro sessions will be logged to Toggl automatically
+Enabled=false
+#APIToken=your_toggl_api_token_here
+#WorkspaceID=12345678
+#ProjectID=87654321
+
+[GoogleCalendar]
+# Google Calendar integration (Phase 3 - not yet implemented)
+# When enabled, Pomodoro sessions will be added to your Google Calendar
+Enabled=false
+#ClientID=your_google_client_id.apps.googleusercontent.com
+#ClientSecret=your_google_client_secret
+#CalendarID=primary
