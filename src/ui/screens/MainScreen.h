@@ -53,9 +53,10 @@ public:
     void update(uint32_t deltaMs) override;
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
     void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) override;
-    void onButtonA() override;  // Start/Pause
+    void onButtonA() override;  // Start/Pause (defers Start in IDLE — see update())
     void onButtonB() override;  // Stats
     void onButtonC() override;  // Settings
+    void handleTouch(int16_t x, int16_t y, bool pressed) override;
 
     // Screen-specific methods
     void setTaskName(const char* task);
@@ -76,6 +77,18 @@ private:
     uint32_t last_update_ms_;
     int16_t TIMER_HEIGHT;
     // Note: needs_redraw_ inherited from Screen base class
+
+    // Long-press → cycle-reset state. Two trigger paths:
+    //   - BtnA held while in IDLE (don't fire Start until release; if held long
+    //     enough, show the confirm dialog instead).
+    //   - Touch held inside the timer digits area (any state).
+    // Both draw a progress arc during the hold and pop the same confirm dialog.
+    uint32_t btn_a_press_start_ = 0;     // 0 = not held; else millis() at press
+    bool btn_a_long_press_consumed_ = false;  // True once the hold tripped the dialog (skip Start on release)
+    uint32_t timer_touch_press_start_ = 0;
+    bool timer_touch_long_press_consumed_ = false;
+    bool reset_dialog_visible_ = false;
+    static constexpr uint32_t LONG_PRESS_MS = 1500;
 
     #define SMALL_FONT fonts::Font2
     #define TIMER_FONT fonts::Font8
@@ -98,6 +111,18 @@ private:
     void drawTimer(Renderer& renderer);
     void drawTaskName(Renderer& renderer);
     void updateButtons();
+
+    // Long-press helpers
+    bool isInTimerHitbox(int16_t x, int16_t y) const;
+    void drawLongPressProgress(Renderer& renderer);
+    void drawResetDialog(Renderer& renderer);
+    void performCycleReset();
+
+    // Reset-dialog hit zones (Yes/No buttons). Recomputed in drawResetDialog().
+    static constexpr int16_t DIALOG_W = 240;
+    static constexpr int16_t DIALOG_H = 110;
+    static constexpr int16_t DIALOG_BTN_W = 90;
+    static constexpr int16_t DIALOG_BTN_H = 32;
 };
 
 #endif // MAINSCREEN_H

@@ -107,6 +107,44 @@ void MainScreen::update(uint32_t deltaMs) {
     progress_bar_.update(deltaMs);
     sequence_indicator_.update(deltaMs);
 
+    // --- BtnA long-press detection (IDLE state) ---
+    // onButtonA() seeded btn_a_press_start_ on wasPressed. Here we watch the
+    // ongoing hold to trigger the dialog at the threshold, and to fall back to
+    // a normal Start if the button is released early.
+    if (btn_a_press_start_ != 0) {
+        if (M5.BtnA.isPressed()) {
+            // Still holding — fire the dialog as soon as we cross the threshold,
+            // so the user gets immediate feedback without waiting for release.
+            if (!btn_a_long_press_consumed_ &&
+                millis() - btn_a_press_start_ >= LONG_PRESS_MS) {
+                btn_a_long_press_consumed_ = true;
+                reset_dialog_visible_ = true;
+                Serial.println("[MainScreen] BtnA long-press → reset dialog");
+            }
+        } else {
+            // Released. If the threshold wasn't crossed, treat it as a normal
+            // Start. Otherwise the dialog is already up — do nothing.
+            uint32_t held = millis() - btn_a_press_start_;
+            btn_a_press_start_ = 0;
+            if (!btn_a_long_press_consumed_ && held < LONG_PRESS_MS) {
+                Serial.printf("[MainScreen] BtnA short press (%lu ms) → Start\n", held);
+                state_machine_.handleEvent(TimerStateMachine::Event::START);
+            }
+            btn_a_long_press_consumed_ = false;
+        }
+    }
+
+    // --- Timer touch long-press detection ---
+    // The press/release events come through handleTouch(); here we only need to
+    // fire the dialog the moment we cross the threshold while still held.
+    if (timer_touch_press_start_ != 0 &&
+        !timer_touch_long_press_consumed_ &&
+        millis() - timer_touch_press_start_ >= LONG_PRESS_MS) {
+        timer_touch_long_press_consumed_ = true;
+        reset_dialog_visible_ = true;
+        Serial.println("[MainScreen] Timer touch long-press → reset dialog");
+    }
+
     needs_redraw_ = true;
 }
 
@@ -138,12 +176,142 @@ void MainScreen::draw(Renderer& renderer) {
     // Draw task name
     drawTaskName(renderer);
 
+    // Long-press progress bar (over the top, only while a hold is in progress)
+    drawLongPressProgress(renderer);
+
+    // Reset confirmation dialog goes on top of everything else
+    if (reset_dialog_visible_) {
+        drawResetDialog(renderer);
+    }
+
     // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
 
     needs_redraw_ = false;
 }
 
-// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
+void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
+    // If the dialog is open, take touches for Yes/No first — don't let them
+    // bleed through to the timer / buttons underneath.
+    if (reset_dialog_visible_) {
+        if (pressed) {
+            int16_t dx = (SCREEN_WIDTH - DIALOG_W) / 2;
+            int16_t dy = (SCREEN_HEIGHT - DIALOG_H) / 2;
+            int16_t btn_y = dy + DIALOG_H - DIALOG_BTN_H - 10;
+            // No (left)
+            int16_t no_x = dx + 20;
+            // Yes (right)
+            int16_t yes_x = dx + DIALOG_W - DIALOG_BTN_W - 20;
+
+            if (y >= btn_y && y <= btn_y + DIALOG_BTN_H) {
+                if (x >= no_x && x <= no_x + DIALOG_BTN_W) {
+                    Serial.println("[MainScreen] Reset dialog: No");
+                    reset_dialog_visible_ = false;
+                    needs_redraw_ = true;
+                    return;
+                }
+                if (x >= yes_x && x <= yes_x + DIALOG_BTN_W) {
+                    Serial.println("[MainScreen] Reset dialog: Yes");
+                    performCycleReset();
+                    reset_dialog_visible_ = false;
+                    needs_redraw_ = true;
+                    return;
+                }
+            }
+        }
+        // Eat the touch so widgets don't react while dialog is up.
+        return;
+    }
+
+    // Long-press tracking on the timer digits: starts on press inside the
+    // hitbox, cancels if the finger releases or drifts out.
+    if (pressed) {
+        if (timer_touch_press_start_ == 0 && isInTimerHitbox(x, y)) {
+            timer_touch_press_start_ = millis();
+            timer_touch_long_press_consumed_ = false;
+        } else if (timer_touch_press_start_ != 0 && !isInTimerHitbox(x, y)) {
+            // Drag-off cancels.
+            timer_touch_press_start_ = 0;
+            timer_touch_long_press_consumed_ = false;
+        }
+    } else {
+        // Release ends the hold; if threshold wasn't crossed it was just a tap
+        // (no action — main screen has no short-tap timer behavior).
+        timer_touch_press_start_ = 0;
+        timer_touch_long_press_consumed_ = false;
+    }
+
+    // Pass-through to the base class so registered widgets still see events.
+    Screen::handleTouch(x, y, pressed);
+}
+
+bool MainScreen::isInTimerHitbox(int16_t x, int16_t y) const {
+    // Loose bounding box around the big MM:SS digits drawn by drawTimer().
+    int16_t y_top = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT;
+    int16_t y_bot = y_top + TIMER_HEIGHT + TIMER_GAP;
+    return x >= 40 && x <= SCREEN_WIDTH - 40 && y >= y_top && y <= y_bot;
+}
+
+void MainScreen::performCycleReset() {
+    // Stop any running/paused timer and reset the breadcrumb back to dot 1.
+    // resetDailyCounter() also zeros completed_today so the cycle truly starts
+    // over (otherwise the badge would still show e.g. 3 from the prior pass).
+    state_machine_.reset();
+    sequence_.reset();
+    sequence_.resetDailyCounter();
+    Serial.println("[MainScreen] Cycle reset: session=1, completed_today=0");
+}
+
+void MainScreen::drawLongPressProgress(Renderer& renderer) {
+    // Show a thin growing bar at the top while either long-press source is held.
+    // Picks whichever start is non-zero so the bar reflects whatever the user
+    // is actively holding (the other source is guaranteed 0 in practice).
+    uint32_t start = btn_a_press_start_ != 0 ? btn_a_press_start_
+                                             : timer_touch_press_start_;
+    if (start == 0) return;
+
+    uint32_t held = millis() - start;
+    if (held < 200) return;  // Tiny grace period so accidental presses don't flash
+
+    uint32_t clamped = held > LONG_PRESS_MS ? LONG_PRESS_MS : held;
+    int16_t fill_w = (int16_t)((SCREEN_WIDTH * clamped) / LONG_PRESS_MS);
+    int16_t y = STATUS_BAR_HEIGHT;  // Just below the status bar
+    renderer.drawRect(0, y, SCREEN_WIDTH, 3, Renderer::Color(TFT_DARKGREY), true);
+    renderer.drawRect(0, y, fill_w, 3, Renderer::Color(TFT_ORANGE), true);
+}
+
+void MainScreen::drawResetDialog(Renderer& renderer) {
+    int16_t dx = (SCREEN_WIDTH - DIALOG_W) / 2;
+    int16_t dy = (SCREEN_HEIGHT - DIALOG_H) / 2;
+
+    // Dim the screen behind the dialog so it reads as modal.
+    renderer.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Renderer::Color(TFT_BLACK), true);
+
+    // Dialog box
+    renderer.drawRect(dx, dy, DIALOG_W, DIALOG_H, Renderer::Color(TFT_NAVY), true);
+    renderer.drawRect(dx, dy, DIALOG_W, DIALOG_H, Renderer::Color(TFT_WHITE), false);
+
+    renderer.setTextDatum(TC_DATUM);
+    renderer.drawString(SCREEN_WIDTH / 2, dy + 12, "Reset cycle?",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+    renderer.drawString(SCREEN_WIDTH / 2, dy + 42, "Breadcrumb back to dot 1",
+                        &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
+
+    // Buttons
+    int16_t btn_y = dy + DIALOG_H - DIALOG_BTN_H - 10;
+    int16_t no_x = dx + 20;
+    int16_t yes_x = dx + DIALOG_W - DIALOG_BTN_W - 20;
+
+    renderer.drawRect(no_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_DARKGREY), true);
+    renderer.drawRect(no_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_WHITE), false);
+    renderer.setTextDatum(MC_DATUM);
+    renderer.drawString(no_x + DIALOG_BTN_W / 2, btn_y + DIALOG_BTN_H / 2, "No",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+
+    renderer.drawRect(yes_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_RED), true);
+    renderer.drawRect(yes_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_WHITE), false);
+    renderer.drawString(yes_x + DIALOG_BTN_W / 2, btn_y + DIALOG_BTN_H / 2, "Yes",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+}
 
 void MainScreen::drawModeLabel(Renderer& renderer) {
     // Draw "Session X/Y" text (work sessions only)
@@ -266,12 +434,23 @@ void MainScreen::getButtonLabels(const char*& btnA, const char*& btnB, const cha
 }
 
 void MainScreen::onButtonA() {
-    // Start/Pause/Resume based on state
+    // If the reset confirmation is open, BtnA cancels it (no action otherwise).
+    if (reset_dialog_visible_) {
+        Serial.println("[MainScreen] BtnA: Cancel reset dialog");
+        reset_dialog_visible_ = false;
+        needs_redraw_ = true;
+        return;
+    }
+
     auto state = state_machine_.getState();
 
     if (state == TimerStateMachine::State::IDLE) {
-        Serial.println("[MainScreen] BtnA: Start timer");
-        state_machine_.handleEvent(TimerStateMachine::Event::START);
+        // Defer Start until release: update() distinguishes a short press
+        // (fires Start) from a long press (opens the reset dialog) by timing
+        // wasReleased(). Tracking begins here on wasPressed().
+        btn_a_press_start_ = millis();
+        btn_a_long_press_consumed_ = false;
+        return;
     } else if (state == TimerStateMachine::State::ACTIVE) {
         Serial.println("[MainScreen] BtnA: Pause timer");
         state_machine_.handleEvent(TimerStateMachine::Event::PAUSE);
@@ -284,6 +463,10 @@ void MainScreen::onButtonA() {
 }
 
 void MainScreen::onButtonB() {
+    if (reset_dialog_visible_) {
+        // Dialog uses BtnA/BtnC for Cancel/Confirm; BtnB is inert while open.
+        return;
+    }
     // Navigate to Stats screen
     Serial.println("[MainScreen] BtnB: Navigate to Stats");
     if (navigate_callback_) {
@@ -292,6 +475,13 @@ void MainScreen::onButtonB() {
 }
 
 void MainScreen::onButtonC() {
+    if (reset_dialog_visible_) {
+        Serial.println("[MainScreen] BtnC: Confirm reset");
+        performCycleReset();
+        reset_dialog_visible_ = false;
+        needs_redraw_ = true;
+        return;
+    }
     // Navigate to Settings screen
     Serial.println("[MainScreen] BtnC: Navigate to Settings");
     if (navigate_callback_) {
