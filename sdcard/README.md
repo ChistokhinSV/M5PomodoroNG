@@ -104,11 +104,13 @@ Timezone=America/New_York
 ```
 
 **Timezone options**:
-- `Timezone=` accepts an IANA name from the built-in table
-  (e.g. `Europe/London`, `America/Los_Angeles`, `Asia/Tokyo`,
-  `Australia/Sydney`, `Pacific/Auckland` — see `network.ini` for
-  the full list) or a raw POSIX TZ string. DST rules are baked
-  into named zones, so spring/autumn transitions are automatic.
+- `Timezone=` accepts any IANA name (`Continent/City`) — the full
+  ~470-entry IANA database is bundled via the
+  [TzDbLookup](https://github.com/nayarsystems/posix_tz_db) library.
+  Examples: `Europe/Belgrade`, `America/Los_Angeles`, `Asia/Tokyo`.
+  A raw POSIX TZ string also works. Bare `UTC` and `GMT` are
+  accepted as aliases. DST rules are baked in, so transitions
+  happen automatically.
 - `TimezoneOffset=` is the legacy fixed-offset path. Combine with
   `DST=true` for automatic summer-time shift using EU rules.
 

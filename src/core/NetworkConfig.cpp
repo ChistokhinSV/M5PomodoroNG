@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include <minIniFS.h>
 #include <esp_heap_caps.h>
+#include <TzDbLookup.h>  // ~470 IANA -> POSIX entries in PROGMEM
 
 NetworkConfig::NetworkConfig(SDManager& sdManager)
     : sd(sdManager),
@@ -356,89 +357,14 @@ void NetworkConfig::freeBuffers() {
 
 // --- Timezone resolution -----------------------------------------------------
 
-namespace {
-// IANA name -> POSIX TZ. POSIX sign convention is WEST-of-UTC positive, so
-// CET (UTC+1) is "CET-1" and EST (UTC-5) is "EST5". DST rules are encoded as
-// Mmonth.week.day[/hour]. Built-in pool covers the common cases; users with
-// exotic zones can paste a POSIX TZ string directly into Timezone= instead.
-struct IanaEntry { const char* iana; const char* posix; };
-constexpr IanaEntry IANA_TABLE[] = {
-    {"UTC",                 "UTC0"},
-    {"GMT",                 "GMT0"},
-    {"Europe/London",       "GMT0BST,M3.5.0/1,M10.5.0/2"},
-    {"Europe/Dublin",       "GMT0IST,M3.5.0/1,M10.5.0/2"},
-    {"Europe/Lisbon",       "WET0WEST,M3.5.0/1,M10.5.0/2"},
-    {"Europe/Berlin",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Paris",        "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Madrid",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Rome",         "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Amsterdam",    "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Brussels",     "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Luxembourg",   "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Vienna",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Zurich",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Warsaw",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Prague",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Bratislava",   "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Budapest",     "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Belgrade",     "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Zagreb",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Sarajevo",     "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Ljubljana",    "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Skopje",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Podgorica",    "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Tirane",       "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Stockholm",    "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Copenhagen",   "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Oslo",         "CET-1CEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Helsinki",     "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Athens",       "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Bucharest",    "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Sofia",        "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Chisinau",     "EET-2EEST,M3.5.0,M10.5.0/3"},
-    {"Europe/Kiev",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Kyiv",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Riga",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Tallinn",      "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Vilnius",      "EET-2EEST,M3.5.0/3,M10.5.0/4"},
-    {"Europe/Moscow",       "MSK-3"},
-    {"Europe/Istanbul",     "TRT-3"},
-    {"America/New_York",    "EST5EDT,M3.2.0,M11.1.0"},
-    {"America/Chicago",     "CST6CDT,M3.2.0,M11.1.0"},
-    {"America/Denver",      "MST7MDT,M3.2.0,M11.1.0"},
-    {"America/Phoenix",     "MST7"},
-    {"America/Los_Angeles", "PST8PDT,M3.2.0,M11.1.0"},
-    {"America/Anchorage",   "AKST9AKDT,M3.2.0,M11.1.0"},
-    {"America/Honolulu",    "HST10"},
-    {"America/Toronto",     "EST5EDT,M3.2.0,M11.1.0"},
-    {"America/Vancouver",   "PST8PDT,M3.2.0,M11.1.0"},
-    {"America/Mexico_City", "CST6CDT,M4.1.0,M10.5.0"},
-    {"America/Sao_Paulo",   "BRT3"},
-    {"America/Buenos_Aires","ART3"},
-    {"Asia/Tokyo",          "JST-9"},
-    {"Asia/Shanghai",       "CST-8"},
-    {"Asia/Hong_Kong",      "HKT-8"},
-    {"Asia/Singapore",      "SGT-8"},
-    {"Asia/Seoul",          "KST-9"},
-    {"Asia/Bangkok",        "ICT-7"},
-    {"Asia/Kolkata",        "IST-5:30"},
-    {"Asia/Dubai",          "GST-4"},
-    {"Asia/Jerusalem",      "IST-2IDT,M3.4.4/26,M10.5.0"},
-    {"Australia/Sydney",    "AEST-10AEDT,M10.1.0,M4.1.0/3"},
-    {"Australia/Melbourne", "AEST-10AEDT,M10.1.0,M4.1.0/3"},
-    {"Australia/Brisbane",  "AEST-10"},
-    {"Australia/Perth",     "AWST-8"},
-    {"Australia/Adelaide",  "ACST-9:30ACDT,M10.1.0,M4.1.0/3"},
-    {"Pacific/Auckland",    "NZST-12NZDT,M9.5.0,M4.1.0/3"},
-};
-}  // namespace
-
 const char* NetworkConfig::mapIanaToPosix(const char* iana_name) {
     if (!iana_name) return nullptr;
-    for (const auto& e : IANA_TABLE) {
-        if (strcmp(e.iana, iana_name) == 0) return e.posix;
-    }
-    return nullptr;
+    // Bare aliases not present in the IANA DB ("Etc/UTC" is the canonical
+    // entry; users still write "UTC" or "GMT").
+    if (strcasecmp(iana_name, "UTC") == 0) return "UTC0";
+    if (strcasecmp(iana_name, "GMT") == 0) return "GMT0";
+    // Full IANA database (~470 zones) lives in TzDbLookup's PROGMEM table.
+    return TzDbLookup::getPosix(iana_name);
 }
 
 void NetworkConfig::resolveTZ() {
@@ -471,12 +397,12 @@ void NetworkConfig::resolveTZ() {
         const char* posix = mapIanaToPosix(ntp.timezone_name);
         const char* src = posix ? posix : ntp.timezone_name;  // Treat unknown as raw POSIX
         if (!posix && strchr(ntp.timezone_name, '/')) {
-            // Looks like an IANA name (has '/') but wasn't in the table.
-            // newlib's tzset() doesn't understand IANA — it'll silently fall
-            // back to UTC. Surface this so the wrong-clock bug is obvious.
-            Serial.printf("[NetworkConfig] WARN: timezone \"%s\" not in built-in IANA table; "
-                          "tzset will likely default to UTC. Add a POSIX TZ string into "
-                          "Timezone= instead, or use TimezoneOffset=.\n",
+            // Looks like an IANA name (has '/') but wasn't in the IANA DB
+            // (TzDbLookup). newlib's tzset() doesn't understand IANA — it'll
+            // silently fall back to UTC. Surface this so the wrong-clock bug
+            // is obvious (almost always a typo at this point).
+            Serial.printf("[NetworkConfig] WARN: timezone \"%s\" not found in IANA database; "
+                          "check spelling, or use TimezoneOffset= / a raw POSIX TZ string.\n",
                           ntp.timezone_name);
         }
         strncpy(ntp.resolved_tz, src, sizeof(ntp.resolved_tz) - 1);

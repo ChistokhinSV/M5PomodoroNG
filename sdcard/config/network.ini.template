@@ -68,25 +68,14 @@ Server=pool.ntp.org
 # Two ways to set the clock; if both are provided, TimezoneOffset wins.
 #
 # 1) Timezone= (recommended for DST regions)
-#    IANA-style name from the built-in table (DST handled automatically):
-#      Europe/London, Europe/Dublin, Europe/Lisbon,
-#      Europe/Berlin, Europe/Paris, Europe/Madrid, Europe/Rome,
-#      Europe/Amsterdam, Europe/Brussels, Europe/Vienna, Europe/Warsaw,
-#      Europe/Prague, Europe/Stockholm,
-#      Europe/Helsinki, Europe/Athens, Europe/Bucharest,
-#      Europe/Kiev, Europe/Kyiv, Europe/Riga, Europe/Tallinn, Europe/Vilnius,
-#      Europe/Moscow, Europe/Istanbul,
-#      America/New_York, America/Chicago, America/Denver, America/Phoenix,
-#      America/Los_Angeles, America/Anchorage, America/Honolulu,
-#      America/Toronto, America/Vancouver, America/Mexico_City,
-#      America/Sao_Paulo, America/Buenos_Aires,
-#      Asia/Tokyo, Asia/Shanghai, Asia/Hong_Kong, Asia/Singapore,
-#      Asia/Seoul, Asia/Bangkok, Asia/Kolkata, Asia/Dubai, Asia/Jerusalem,
-#      Australia/Sydney, Australia/Melbourne, Australia/Brisbane,
-#      Australia/Perth, Australia/Adelaide,
-#      Pacific/Auckland
+#    Any IANA tz name (Continent/City) -- the full ~470-entry database is
+#    bundled via the TzDbLookup library, e.g.:
+#      Europe/London, Europe/Belgrade, America/Los_Angeles, Asia/Tokyo,
+#      Australia/Sydney, Pacific/Auckland, ...
+#    Full list: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 #    A raw POSIX TZ string also works (e.g. "CET-1CEST,M3.5.0,M10.5.0/3").
 #    DST transitions are encoded in the rules, so they happen automatically.
+#    Lookups are case-insensitive. Bare "UTC" and "GMT" are also accepted.
 # Timezone=Europe/London
 
 # 2) TimezoneOffset= (legacy fixed offset, in seconds from UTC)
