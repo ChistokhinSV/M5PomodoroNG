@@ -32,8 +32,8 @@
  *   );
  *
  * Synchronization:
- * - Sends updates via g_networkStatusQueue (Core 1 → Core 0)
- * - Receives state changes via g_shadowPublishQueue (Core 0 → Core 1)
+ * - Sends status updates via g_networkStatusQueue (Core 1 → Core 0)
+ * - Receives session events via g_sessionEventQueue (Core 0 → Core 1)
  * - Updates g_networkEvents event group (WiFi/MQTT/NTP status bits)
  *
  * @param parameter Task parameter (not used, pass NULL)

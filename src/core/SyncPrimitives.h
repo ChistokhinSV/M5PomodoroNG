@@ -6,6 +6,7 @@
 #include <freertos/queue.h>
 #include <freertos/event_groups.h>
 #include <stdint.h>
+#include "../network/SessionEvent.h"
 
 /**
  * FreeRTOS Synchronization Primitives for Multi-core Architecture
@@ -30,24 +31,9 @@
 // Queue Data Structures
 // ============================================================================
 
-/**
- * Shadow update message (Core 0 → Core 1)
- * Sent when timer state changes and needs to be published to AWS IoT Shadow
- */
-struct ShadowUpdate {
-    enum class Type {
-        TIMER_STATE,      // Timer state changed (IDLE/ACTIVE/PAUSED)
-        SESSION_COMPLETE, // Work/break session completed
-        STATS_UPDATED     // Daily statistics updated
-    };
-
-    Type type;
-    uint32_t timestamp;    // Unix timestamp when event occurred
-    uint8_t state;         // TimerStateMachine::State (0=IDLE, 1=ACTIVE, 2=PAUSED)
-    uint8_t session_type;  // PomodoroSequence::SessionType (0=WORK, 1=SHORT_BREAK, 2=LONG_BREAK)
-    uint8_t completed;     // Number of completed work sessions today
-    uint16_t remaining_sec; // Remaining seconds in current session (if ACTIVE)
-};
+// SessionEventMessage lives in network/SessionEvent.h. Queue declared below
+// is the canonical Core 0 -> Core 1 fan-out for both webhooks (this PR) and
+// the upcoming MQTT shadow publisher.
 
 /**
  * Network status message (Core 1 → Core 0)
@@ -75,8 +61,9 @@ struct NetworkStatus {
 // Global Queues
 // ============================================================================
 
-// Core 0 → Core 1: State changes to publish to cloud
-extern QueueHandle_t g_shadowPublishQueue;
+// Core 0 → Core 1: Session events for webhook delivery and (future) MQTT
+// shadow publishes. Consumers in NetworkTask drain this queue.
+extern QueueHandle_t g_sessionEventQueue;
 
 // Core 1 → Core 0: Network status updates for UI
 extern QueueHandle_t g_networkStatusQueue;

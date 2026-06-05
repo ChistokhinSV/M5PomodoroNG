@@ -81,9 +81,10 @@ cp -r sdcard/* /Volumes/SDCARD/  # Replace path with your SD mount point
   - `Password=YourWiFiPassword` → Your WiFi password
 
 **Optional edits**:
-- `[MQTT]` section: AWS IoT endpoint and client ID (for cloud sync)
-- `[NTP]` section: NTP server and timezone offset
-- `[CloudSync]` section: Enable/disable cloud sync, sync interval
+- `[NTP]` section: NTP server and timezone (named or fixed offset + DST)
+- `[Webhook.N]` sections: HTTPS POST hooks for Telegram / Discord /
+  Zapier / n8n / IFTTT / your own scripts (see below)
+- `[MQTT]` + `[CloudSync]` sections: AWS IoT shadow sync (next firmware slice)
 
 **Example**:
 ```ini
@@ -110,6 +111,69 @@ Timezone=America/New_York
   into named zones, so spring/autumn transitions are automatic.
 - `TimezoneOffset=` is the legacy fixed-offset path. Combine with
   `DST=true` for automatic summer-time shift using EU rules.
+
+**Webhooks** (generic integration path):
+
+On session events the device fires HTTPS POSTs with a JSON body to
+each configured URL. Use this to plug into Telegram (via your own
+bot or a relay), Discord, Zapier, n8n, IFTTT, or any homemade
+script. Up to 4 endpoints in `[Webhook.1]` … `[Webhook.4]`.
+
+```ini
+[Webhook.1]
+URL=https://discord.com/api/webhooks/<ID>/<TOKEN>
+Events=work_complete,cycle_complete
+
+[Webhook.2]
+URL=https://hooks.zapier.com/hooks/catch/.../xyz
+Events=*
+AuthHeader=Bearer your_secret
+
+# Telegram (no relay needed):
+[Webhook.3]
+URL=https://api.telegram.org/bot<TOKEN>/sendMessage
+Format=telegram
+ChatID=<CHAT_ID>
+Events=work_complete,cycle_complete
+Text=Pomodoro {event}: session {session_number}/{total_sessions}, today {today}
+```
+
+**Telegram setup**: message `@BotFather` on Telegram, `/newbot`, save the
+token. Then message your new bot once, open
+`https://api.telegram.org/bot<TOKEN>/getUpdates`, and copy the `chat.id`
+from the JSON response. Personal chats are positive integers, groups are
+negative (e.g. `-1001234567890`), public channels accept `@channelname`.
+
+**Template placeholders** (used by `Format=telegram` `Text=`):
+`{event}`, `{duration_min}`, `{session_number}`, `{total_sessions}`,
+`{today}`, `{week}`, `{device}`. Unknown placeholders pass through
+verbatim.
+
+Supported event names: `work_complete`, `break_complete`,
+`cycle_complete`. Use `*` (or omit `Events=`) to subscribe to all.
+
+JSON payload:
+
+```json
+{
+  "event": "work_complete",
+  "device": "<MQTT.ClientID>",
+  "timestamp": 1717612345,
+  "duration_min": 25,
+  "session_number": 3,
+  "total_sessions": 4,
+  "today": 5,
+  "week": 18
+}
+```
+
+WiFi is on-demand: the device connects when a session ends, fires
+the configured webhooks sequentially, and disconnects. Battery cost
+is roughly one ~5-second WiFi burst per session boundary.
+
+Service-specific integrations (Toggl, Google Calendar, etc.) live
+in a server-side companion app driven by the MQTT device shadow —
+not in the firmware. That arrives in the next firmware slice.
 
 ### 4. (Optional) Setup SSL Certificates
 

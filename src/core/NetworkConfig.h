@@ -75,6 +75,37 @@ public:
     };
 
     /**
+     * Single webhook endpoint loaded from a [Webhook.N] section of network.ini.
+     * Up to MAX_WEBHOOKS may be configured. enabled is true only when URL is
+     * populated. event_mask is a bitmask of SessionEvent values (see
+     * network/SessionEvent.h); SESSION_EVENT_ALL means "fire on every event".
+     */
+    static constexpr uint8_t MAX_WEBHOOKS = 4;
+
+    // Payload shape selector. JSON (default) sends our generic SessionEvent
+    // JSON; TELEGRAM sends {chat_id, text} with the text rendered from the
+    // Text= template — saves users from running a relay.
+    enum class WebhookFormat : uint8_t {
+        JSON = 0,
+        TELEGRAM = 1,
+    };
+
+    struct WebhookEndpoint {
+        bool enabled = false;
+        uint8_t event_mask = 0;
+        WebhookFormat format = WebhookFormat::JSON;
+        char url[192] = "";
+        char auth_header[128] = "";   // Full Authorization header value, e.g. "Bearer xxx"
+        char chat_id[24] = "";        // Required when format=TELEGRAM (numeric; negative for groups)
+        char text_template[256] = ""; // Template with {placeholders}; empty = sensible default
+    };
+
+    struct WebhookSettings {
+        WebhookEndpoint endpoints[MAX_WEBHOOKS];
+        uint8_t count = 0;  // Number of populated endpoints
+    };
+
+    /**
      * NTP time synchronization settings
      *
      * Timezone resolution precedence (computed once at load() time into
@@ -141,6 +172,11 @@ public:
     const NTPSettings& getNTP() const { return ntp; }
 
     /**
+     * Get configured webhook endpoints (up to MAX_WEBHOOKS).
+     */
+    const WebhookSettings& getWebhooks() const { return webhooks; }
+
+    /**
      * Get root CA certificate content (PEM format)
      * @return Null-terminated PEM string, or nullptr if not loaded
      */
@@ -179,6 +215,7 @@ private:
     CertPaths cert_paths;
     CloudSyncSettings cloud_sync;
     NTPSettings ntp;
+    WebhookSettings webhooks;
 
     // Certificate content buffers (allocated from PSRAM if available)
     char* root_ca_content = nullptr;

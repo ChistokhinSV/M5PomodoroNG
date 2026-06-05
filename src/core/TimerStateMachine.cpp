@@ -1,7 +1,10 @@
 #include "TimerStateMachine.h"
 #include "Statistics.h"
+#include "SyncPrimitives.h"
+#include "../network/SessionEvent.h"
 #include "../utils/MutexGuard.h"
 #include <Arduino.h>
+#include <time.h>
 
 TimerStateMachine::TimerStateMachine(PomodoroSequence& seq)
     : sequence(seq),
@@ -72,6 +75,8 @@ bool TimerStateMachine::handleEvent(Event event) {
                 // (PomodoroSequence) and the persistent NVS stats log.
                 // Capture the session info before advance() rewinds it.
                 auto finishing = sequence.getCurrentSession();
+                uint8_t finishing_work_session = sequence.getCurrentWorkSession();
+                uint8_t total_work_sessions   = sequence.getTotalWorkSessions();
                 if (finishing.type == PomodoroSequence::SessionType::WORK) {
                     sequence.incrementCompletedToday();
                     if (statistics) {
@@ -99,6 +104,43 @@ bool TimerStateMachine::handleEvent(Event event) {
                              next_sess.number,
                              next_sess.type == PomodoroSequence::SessionType::WORK ? "WORK" :
                              next_sess.type == PomodoroSequence::SessionType::SHORT_BREAK ? "SHORT_BREAK" : "LONG_BREAK");
+
+                // Fan out a SessionEvent for webhook / shadow consumers. Work
+                // sessions emit WORK_COMPLETE; the cycle-ending one ALSO emits
+                // CYCLE_COMPLETE so a webhook can subscribe to just cycle ends.
+                // Break sessions emit BREAK_COMPLETE. Queue is bounded; on full
+                // we drop oldest so the most recent event still gets through.
+                if (g_sessionEventQueue) {
+                    SessionEventMessage ev{};
+                    ev.timestamp      = static_cast<uint32_t>(time(nullptr));
+                    ev.duration_min   = finishing.duration_min;
+                    ev.session_number = finishing_work_session;
+                    ev.total_sessions = total_work_sessions;
+                    if (statistics) {
+                        ev.today_count = statistics->getToday().completed_sessions;
+                        ev.week_count  = statistics->getLast7DaysTotal();
+                    }
+
+                    auto push = [](const SessionEventMessage& m) {
+                        if (xQueueSend(g_sessionEventQueue, &m, 0) == pdTRUE) return;
+                        SessionEventMessage dropped;
+                        xQueueReceive(g_sessionEventQueue, &dropped, 0);
+                        xQueueSend(g_sessionEventQueue, &m, 0);
+                        Serial.println("[StateMachine] WARN: sessionEventQueue full, dropped oldest");
+                    };
+
+                    if (finishing.type == PomodoroSequence::SessionType::WORK) {
+                        ev.type = SessionEvent::WORK_COMPLETE;
+                        push(ev);
+                        if (cycle_completed) {
+                            ev.type = SessionEvent::CYCLE_COMPLETE;
+                            push(ev);
+                        }
+                    } else {
+                        ev.type = SessionEvent::BREAK_COMPLETE;
+                        push(ev);
+                    }
+                }
 
                 // MP-27: Trigger celebratory haptic on cycle completion
                 if (cycle_completed && haptic_controller) {

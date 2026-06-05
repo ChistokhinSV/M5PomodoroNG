@@ -1,4 +1,6 @@
 #include "NetworkConfig.h"
+#include "../network/SessionEvent.h"
+#include "../network/WebhookDispatcher.h"  // for maskUrl
 #include <Arduino.h>
 #include <minIniFS.h>
 #include <esp_heap_caps.h>
@@ -133,6 +135,54 @@ bool NetworkConfig::loadIniFile() {
 
     // Pick which input wins, build the POSIX TZ string for setenv("TZ", ...).
     resolveTZ();
+
+    // Webhook endpoints: [Webhook.1] .. [Webhook.MAX_WEBHOOKS]. Stop at the
+    // first section that has no URL.
+    webhooks.count = 0;
+    for (uint8_t i = 0; i < MAX_WEBHOOKS; ++i) {
+        char section[16];
+        snprintf(section, sizeof(section), "Webhook.%u", static_cast<unsigned>(i + 1));
+
+        String url_s = ini.gets(section, "URL", "");
+        if (url_s.length() == 0) continue;
+
+        WebhookEndpoint& w = webhooks.endpoints[webhooks.count++];
+        w.enabled = true;
+        strncpy(w.url, url_s.c_str(), sizeof(w.url) - 1);
+        w.url[sizeof(w.url) - 1] = '\0';
+
+        String events_s = ini.gets(section, "Events", "*");
+        w.event_mask = parseSessionEventMask(events_s.c_str());
+
+        String auth_s = ini.gets(section, "AuthHeader", "");
+        strncpy(w.auth_header, auth_s.c_str(), sizeof(w.auth_header) - 1);
+        w.auth_header[sizeof(w.auth_header) - 1] = '\0';
+
+        // Optional Format= selector. Unknown values fall back to JSON.
+        String fmt_s = ini.gets(section, "Format", "json");
+        fmt_s.toLowerCase();
+        w.format = (fmt_s == "telegram") ? WebhookFormat::TELEGRAM : WebhookFormat::JSON;
+
+        String chat_s = ini.gets(section, "ChatID", "");
+        strncpy(w.chat_id, chat_s.c_str(), sizeof(w.chat_id) - 1);
+        w.chat_id[sizeof(w.chat_id) - 1] = '\0';
+
+        String text_s = ini.gets(section, "Text", "");
+        strncpy(w.text_template, text_s.c_str(), sizeof(w.text_template) - 1);
+        w.text_template[sizeof(w.text_template) - 1] = '\0';
+
+        if (w.format == WebhookFormat::TELEGRAM && w.chat_id[0] == '\0') {
+            Serial.printf("[NetworkConfig] WARN: Webhook[%u] format=telegram but no ChatID; will be skipped\n",
+                          static_cast<unsigned>(i + 1));
+        }
+
+        char masked[208];
+        WebhookDispatcher::maskUrl(w.url, masked, sizeof(masked));
+        Serial.printf("[NetworkConfig] Webhook[%u]: %s (events=0x%02X, format=%s%s)\n",
+                      static_cast<unsigned>(i + 1), masked, w.event_mask,
+                      w.format == WebhookFormat::TELEGRAM ? "telegram" : "json",
+                      w.auth_header[0] ? ", auth" : "");
+    }
 
     // Validate required settings
     if (strlen(wifi.ssid) == 0) {
@@ -324,13 +374,28 @@ constexpr IanaEntry IANA_TABLE[] = {
     {"Europe/Rome",         "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Amsterdam",    "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Brussels",     "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Luxembourg",   "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Vienna",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Zurich",       "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Warsaw",       "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Prague",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Bratislava",   "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Budapest",     "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Belgrade",     "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Zagreb",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Sarajevo",     "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Ljubljana",    "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Skopje",       "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Podgorica",    "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Tirane",       "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Stockholm",    "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Copenhagen",   "CET-1CEST,M3.5.0,M10.5.0/3"},
+    {"Europe/Oslo",         "CET-1CEST,M3.5.0,M10.5.0/3"},
     {"Europe/Helsinki",     "EET-2EEST,M3.5.0/3,M10.5.0/4"},
     {"Europe/Athens",       "EET-2EEST,M3.5.0/3,M10.5.0/4"},
     {"Europe/Bucharest",    "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Sofia",        "EET-2EEST,M3.5.0/3,M10.5.0/4"},
+    {"Europe/Chisinau",     "EET-2EEST,M3.5.0,M10.5.0/3"},
     {"Europe/Kiev",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
     {"Europe/Kyiv",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
     {"Europe/Riga",         "EET-2EEST,M3.5.0/3,M10.5.0/4"},
@@ -405,6 +470,15 @@ void NetworkConfig::resolveTZ() {
     if (ntp.timezone_name[0] != '\0') {
         const char* posix = mapIanaToPosix(ntp.timezone_name);
         const char* src = posix ? posix : ntp.timezone_name;  // Treat unknown as raw POSIX
+        if (!posix && strchr(ntp.timezone_name, '/')) {
+            // Looks like an IANA name (has '/') but wasn't in the table.
+            // newlib's tzset() doesn't understand IANA — it'll silently fall
+            // back to UTC. Surface this so the wrong-clock bug is obvious.
+            Serial.printf("[NetworkConfig] WARN: timezone \"%s\" not in built-in IANA table; "
+                          "tzset will likely default to UTC. Add a POSIX TZ string into "
+                          "Timezone= instead, or use TimezoneOffset=.\n",
+                          ntp.timezone_name);
+        }
         strncpy(ntp.resolved_tz, src, sizeof(ntp.resolved_tz) - 1);
         ntp.resolved_tz[sizeof(ntp.resolved_tz) - 1] = '\0';
         return;

@@ -104,23 +104,68 @@ TimezoneOffset=0
 DST=false
 
 # ============================================================================
-# Phase 3 Features (Future) - Not Yet Implemented
+# Webhooks  (the generic integration path)
 # ============================================================================
-# These sections are placeholders for future cloud service integrations
-# You can ignore them for now
-
-[Toggl]
-# Toggl time tracking integration (Phase 3 - not yet implemented)
-# When enabled, Pomodoro sessions will be logged to Toggl automatically
-Enabled=false
-#APIToken=your_toggl_api_token_here
-#WorkspaceID=12345678
-#ProjectID=87654321
-
-[GoogleCalendar]
-# Google Calendar integration (Phase 3 - not yet implemented)
-# When enabled, Pomodoro sessions will be added to your Google Calendar
-Enabled=false
-#ClientID=your_google_client_id.apps.googleusercontent.com
-#ClientSecret=your_google_client_secret
-#CalendarID=primary
+# On session events the device POSTs a small JSON body to each configured
+# URL. Use this to plug into Telegram (via your own bot or a relay), Discord,
+# Zapier, n8n, IFTTT, or any homemade script. Service-specific integrations
+# (Toggl, Google Calendar, etc.) live in the server-side companion app and
+# consume the MQTT device shadow (next firmware slice) -- not the firmware.
+#
+# Up to 4 webhooks are supported: [Webhook.1] .. [Webhook.4].
+#
+# Keys per webhook:
+#   URL        Full https:// (or http://) endpoint. Required.
+#   Events     Comma-separated event filter, or "*" for all. Default "*".
+#              Supported events:
+#                work_complete   work session timed out
+#                break_complete  short or long break timed out
+#                cycle_complete  full Pomodoro cycle finished
+#   AuthHeader Optional Authorization header value (e.g. "Bearer xxx").
+#   Format     Payload shape. Default "json". "telegram" emits Telegram's
+#              own {chat_id, text} shape so no relay is needed.
+#   ChatID     Required when Format=telegram. Your Telegram chat id.
+#              Numeric (e.g. 123456789 for a personal chat, -1001234567890
+#              for a supergroup) or "@channelname" for public channels.
+#   Text       Message template (Format=telegram only). Placeholders are
+#              substituted before sending:
+#                {event}           e.g. "work_complete"
+#                {duration_min}    minutes of the just-finished session
+#                {session_number}  1-based work session inside the cycle
+#                {total_sessions}  work sessions per cycle
+#                {today}           completed work sessions today
+#                {week}            rolling 7-day total
+#                {device}          MQTT.ClientID
+#              Empty Text= falls back to a sensible per-event default.
+#
+# Default JSON payload schema (Format=json, POST body, application/json):
+#   {
+#     "event": "work_complete",
+#     "device": "<MQTT.ClientID>",
+#     "timestamp": 1717612345,
+#     "duration_min": 25,
+#     "session_number": 3,
+#     "total_sessions": 4,
+#     "today": 5,
+#     "week": 18
+#   }
+#
+# Examples:
+#
+# [Webhook.1]
+# URL=https://hooks.zapier.com/hooks/catch/12345/abcdef/
+# Events=*
+#
+# [Webhook.2]
+# URL=https://discord.com/api/webhooks/<ID>/<TOKEN>
+# Events=work_complete,cycle_complete
+#
+# [Webhook.3]
+# # Telegram bot. Get TOKEN from @BotFather; get CHAT_ID by messaging your
+# # bot once then opening https://api.telegram.org/bot<TOKEN>/getUpdates and
+# # finding "chat":{"id":<CHAT_ID>,...} in the JSON response.
+# URL=https://api.telegram.org/bot<TOKEN>/sendMessage
+# Format=telegram
+# ChatID=<CHAT_ID>
+# Events=work_complete,cycle_complete
+# Text=Pomodoro {event}: session {session_number}/{total_sessions}, today {today}

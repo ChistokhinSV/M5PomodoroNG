@@ -5,7 +5,7 @@
 // Global Queue Handles
 // ============================================================================
 
-QueueHandle_t g_shadowPublishQueue = NULL;
+QueueHandle_t g_sessionEventQueue = NULL;
 QueueHandle_t g_networkStatusQueue = NULL;
 
 // ============================================================================
@@ -37,12 +37,12 @@ bool initSyncPrimitives() {
     Serial.println("[SyncPrimitives] Initializing FreeRTOS synchronization objects...");
 
     // Create queues
-    g_shadowPublishQueue = xQueueCreate(10, sizeof(ShadowUpdate));
-    if (g_shadowPublishQueue == NULL) {
-        Serial.println("[SyncPrimitives] ERROR: Failed to create shadowPublishQueue");
+    g_sessionEventQueue = xQueueCreate(10, sizeof(SessionEventMessage));
+    if (g_sessionEventQueue == NULL) {
+        Serial.println("[SyncPrimitives] ERROR: Failed to create sessionEventQueue");
         return false;
     }
-    Serial.println("[SyncPrimitives] ✓ shadowPublishQueue created (10 items, Core 0 → Core 1)");
+    Serial.println("[SyncPrimitives] sessionEventQueue created (10 items, Core 0 -> Core 1)");
 
     g_networkStatusQueue = xQueueCreate(5, sizeof(NetworkStatus));
     if (g_networkStatusQueue == NULL) {
@@ -113,10 +113,10 @@ void cleanupSyncPrimitives() {
     Serial.println("[SyncPrimitives] Cleaning up synchronization objects...");
 
     // Delete queues
-    if (g_shadowPublishQueue != NULL) {
-        vQueueDelete(g_shadowPublishQueue);
-        g_shadowPublishQueue = NULL;
-        Serial.println("[SyncPrimitives] shadowPublishQueue deleted");
+    if (g_sessionEventQueue != NULL) {
+        vQueueDelete(g_sessionEventQueue);
+        g_sessionEventQueue = NULL;
+        Serial.println("[SyncPrimitives] sessionEventQueue deleted");
     }
 
     if (g_networkStatusQueue != NULL) {
@@ -174,9 +174,9 @@ void printSyncStatus() {
     Serial.println("\n========== Synchronization Status ==========");
 
     // Queue status
-    Serial.printf("shadowPublishQueue: %d/%d items pending\n",
-                  uxQueueMessagesWaiting(g_shadowPublishQueue),
-                  uxQueueSpacesAvailable(g_shadowPublishQueue) + uxQueueMessagesWaiting(g_shadowPublishQueue));
+    Serial.printf("sessionEventQueue: %d/%d items pending\n",
+                  uxQueueMessagesWaiting(g_sessionEventQueue),
+                  uxQueueSpacesAvailable(g_sessionEventQueue) + uxQueueMessagesWaiting(g_sessionEventQueue));
 
     Serial.printf("networkStatusQueue: %d/%d items pending\n",
                   uxQueueMessagesWaiting(g_networkStatusQueue),

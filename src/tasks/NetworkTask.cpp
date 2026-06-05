@@ -1,81 +1,152 @@
 #include "NetworkTask.h"
-#include <Arduino.h>
 #include "../core/SyncPrimitives.h"
+#include "../core/NetworkConfig.h"
+#include "../network/SessionEvent.h"
+#include "../network/WebhookDispatcher.h"
+#include <Arduino.h>
+#include <WiFi.h>
+#include <string.h>
 
 /**
- * Network Task (Core 1 - Application CPU)
+ * Network Task (Core 1)
  *
- * **Phase 2 (Current)**: Skeleton implementation - just logs heartbeat
- * **Phase 3 (Future)**: Will implement:
- *   - WiFiManager: Connection management, reconnection logic
- *   - MQTTClient: AWS IoT MQTT over TLS, subscription handling
- *   - NTPClient: Time synchronization, drift correction
- *   - ShadowSync: Device Shadow document sync, queue-based publishing
+ * Drains g_sessionEventQueue. When the first event arrives, brings WiFi up,
+ * dispatches the event to every configured webhook (filtered by event mask),
+ * then drains any additional events that piled up during the connect before
+ * tearing WiFi down again.
  *
- * This task demonstrates that:
- * 1. Core 1 is active and running independently
- * 2. FreeRTOS task creation works correctly
- * 3. Multi-core architecture is functional
- * 4. UI on Core 0 remains responsive (network doesn't block)
+ * On-demand WiFi for now. The dispatcher is stateless so when the upcoming
+ * MQTT shadow PR introduces a persistent-WiFi mode (needed for subscribe),
+ * we just skip the connect/disconnect cycle and call dispatch() on the
+ * persistent connection.
  *
- * Test Approach:
- * - Check serial output shows both Core 0 and Core 1 messages
- * - Verify UI remains responsive (touch works while network task runs)
- * - Monitor task stats (vTaskGetRunTimeStats) for core distribution
+ * Architecture decoupling: producers (TimerStateMachine) don't know about
+ * webhooks or MQTT — they push SessionEventMessage to a shared queue and
+ * this task fans out to whichever subscribers exist.
  */
 
-// Task handle (for monitoring and debugging)
+// Externs supplied by main.cpp
+extern NetworkConfig* g_networkConfig;
+
 TaskHandle_t g_networkTaskHandle = NULL;
 
-void networkTask(void* parameter) {
-    Serial.println("[NetworkTask] Starting on Core 1...");
-    Serial.printf("[NetworkTask] Task handle: 0x%08X\n", (uint32_t)xTaskGetCurrentTaskHandle());
-    Serial.printf("[NetworkTask] Priority: %d\n", uxTaskPriorityGet(NULL));
-    Serial.printf("[NetworkTask] Stack size: %d bytes\n", uxTaskGetStackHighWaterMark(NULL) * 4);
-    Serial.println("[NetworkTask] Skeleton implementation (Phase 2)");
-    Serial.println("[NetworkTask] Phase 3 TODO: WiFi, MQTT, NTP, Shadow sync");
+namespace {
 
-    // Save task handle for monitoring
+void sendStatus(NetworkStatus::Event ev, int16_t rssi, const char* msg) {
+    if (!g_networkStatusQueue) return;
+    NetworkStatus s{};
+    s.event = ev;
+    s.timestamp = millis();
+    s.rssi = rssi;
+    if (msg) {
+        strncpy(s.message, msg, sizeof(s.message) - 1);
+        s.message[sizeof(s.message) - 1] = '\0';
+    }
+    xQueueSend(g_networkStatusQueue, &s, 0);  // best-effort
+}
+
+// Connect using the credentials from network.ini. Block up to 15s.
+bool connectWiFi() {
+    if (!g_networkConfig || !g_networkConfig->isValid()) {
+        Serial.println("[NetworkTask] No network config; cannot connect WiFi");
+        return false;
+    }
+    const auto& wifi_cfg = g_networkConfig->getWiFi();
+    if (wifi_cfg.ssid[0] == '\0') {
+        Serial.println("[NetworkTask] WiFi SSID empty; nothing to do");
+        return false;
+    }
+    if (WiFi.status() == WL_CONNECTED) return true;  // already up
+
+    Serial.printf("[NetworkTask] WiFi connecting to %s ...\n", wifi_cfg.ssid);
+    sendStatus(NetworkStatus::Event::WIFI_CONNECTING, 0, wifi_cfg.ssid);
+
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(wifi_cfg.ssid, wifi_cfg.password);
+
+    const uint32_t timeout_ms = 15000;
+    uint32_t start = millis();
+    while (WiFi.status() != WL_CONNECTED && (millis() - start) < timeout_ms) {
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
+
+    if (WiFi.status() != WL_CONNECTED) {
+        Serial.printf("[NetworkTask] WiFi connect FAILED after %lu ms\n",
+                      (unsigned long)(millis() - start));
+        sendStatus(NetworkStatus::Event::WIFI_DISCONNECTED, 0, "connect timeout");
+        WiFi.disconnect(true);
+        return false;
+    }
+
+    int16_t rssi = WiFi.RSSI();
+    Serial.printf("[NetworkTask] WiFi connected (%lu ms, RSSI %d, IP %s)\n",
+                  (unsigned long)(millis() - start), rssi,
+                  WiFi.localIP().toString().c_str());
+    sendStatus(NetworkStatus::Event::WIFI_CONNECTED, rssi,
+               WiFi.localIP().toString().c_str());
+    return true;
+}
+
+void disconnectWiFi() {
+    if (WiFi.status() == WL_CONNECTED) {
+        WiFi.disconnect(true);
+        Serial.println("[NetworkTask] WiFi disconnected");
+        sendStatus(NetworkStatus::Event::WIFI_DISCONNECTED, 0, "ondemand off");
+    }
+}
+
+}  // namespace
+
+void networkTask(void* parameter) {
+    Serial.println("[NetworkTask] Starting on Core 1");
+    Serial.printf("[NetworkTask] Stack high-water at entry: %d bytes\n",
+                  uxTaskGetStackHighWaterMark(NULL) * 4);
     g_networkTaskHandle = xTaskGetCurrentTaskHandle();
 
-    uint32_t heartbeat_counter = 0;
-    uint32_t last_heartbeat = millis();
+    // Dispatcher is constructed once and held for the task lifetime. It owns
+    // no sockets; everything is per-call. Pointer to MQTT.ClientID is stored
+    // for the JSON "device" field — that buffer lives in NetworkConfig.
+    const char* device_id = (g_networkConfig && g_networkConfig->isValid())
+                            ? g_networkConfig->getMQTT().client_id
+                            : "m5-pomodoro";
+    WebhookDispatcher dispatcher(device_id);
 
+    // No webhooks configured? Park the task with periodic heartbeats so it
+    // stays observable but doesn't burn cycles. Avoids consuming the queue
+    // (events stay buffered in case config gets added later).
+    bool has_webhooks = (g_networkConfig && g_networkConfig->isValid() &&
+                        g_networkConfig->getWebhooks().count > 0);
+    if (!has_webhooks) {
+        Serial.println("[NetworkTask] No webhooks configured; idle loop");
+        while (true) {
+            vTaskDelay(pdMS_TO_TICKS(60000));
+        }
+    }
+
+    Serial.printf("[NetworkTask] %u webhook(s) configured\n",
+                  g_networkConfig->getWebhooks().count);
+
+    SessionEventMessage ev;
     while (true) {
-        // Heartbeat every 10 seconds (proves Core 1 is running)
-        uint32_t now = millis();
-        if (now - last_heartbeat >= 10000) {
-            last_heartbeat = now;
-            heartbeat_counter++;
+        // Block waiting for the first event of a burst.
+        if (xQueueReceive(g_sessionEventQueue, &ev, portMAX_DELAY) != pdTRUE) continue;
 
-            Serial.printf("[NetworkTask] Heartbeat #%lu (Core 1 alive)\n", heartbeat_counter);
-            Serial.printf("[NetworkTask] Free stack: %d bytes\n", uxTaskGetStackHighWaterMark(NULL) * 4);
-
-            // Test: Send fake network status update to Core 0
-            // In Phase 3, this will be real WiFi/MQTT status
-            NetworkStatus status;
-            status.event = NetworkStatus::Event::WIFI_DISCONNECTED;
-            status.timestamp = now;
-            status.rssi = 0;
-            strncpy(status.message, "Phase 2: No network", sizeof(status.message) - 1);
-            status.message[sizeof(status.message) - 1] = '\0';
-
-            // Send to Core 0 (non-blocking, drop if queue full)
-            if (xQueueSend(g_networkStatusQueue, &status, 0) != pdTRUE) {
-                Serial.println("[NetworkTask] WARNING: networkStatusQueue full, message dropped");
-            }
+        if (!connectWiFi()) {
+            // Couldn't connect — drop this event so the queue doesn't back up
+            // forever when WiFi is unreachable. User can see the failure in logs.
+            Serial.printf("[NetworkTask] Dropping %s event (no WiFi)\n",
+                          sessionEventName(ev.type));
+            continue;
         }
 
-        // Check for shadow publish requests from Core 0
-        // In Phase 3, this will trigger MQTT publish to AWS IoT
-        ShadowUpdate update;
-        if (xQueueReceive(g_shadowPublishQueue, &update, 0) == pdTRUE) {
-            Serial.printf("[NetworkTask] Received shadow update from Core 0: type=%d\n", (int)update.type);
-            Serial.println("[NetworkTask] Phase 3 TODO: Publish to AWS IoT Shadow");
-            // TODO Phase 3: Publish to AWS IoT Device Shadow via MQTT
+        // Fire this event, then drain any others that piled up during the
+        // connect. Short 2s timeout — if no more events arrive in 2s, the
+        // burst is over and we tear WiFi down.
+        dispatcher.dispatch(g_networkConfig->getWebhooks(), ev);
+        while (xQueueReceive(g_sessionEventQueue, &ev, pdMS_TO_TICKS(2000)) == pdTRUE) {
+            dispatcher.dispatch(g_networkConfig->getWebhooks(), ev);
         }
 
-        // Sleep for 1 second (network task doesn't need to run frequently)
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        disconnectWiFi();
     }
 }
