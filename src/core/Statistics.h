@@ -55,7 +55,7 @@ public:
     void getLast30Days(DayStats* out_array) const;
 
     // Aggregated stats
-    uint16_t getTotalCompleted() const;        // All-time total
+    uint32_t getTotalCompleted() const;        // Lifetime total (buffer + overflow)
     uint16_t getLast7DaysTotal() const;
     uint16_t getLast30DaysTotal() const;
     float getCompletionRate() const;           // % of sessions completed vs interrupted
@@ -70,10 +70,16 @@ private:
 
     static constexpr const char* NAMESPACE = "stats";
     static constexpr uint8_t MAX_DAYS = 90;
+    static constexpr const char* KEY_OVERFLOW = "overflow";
 
     // Current day cache (to avoid repeated NVS writes)
     DayStats today_cache;
     bool cache_valid = false;
+
+    // Sessions that fell out of the 90-day buffer. Bumped whenever a slot is
+    // overwritten with new-day data. Persisted to KEY_OVERFLOW. Added on top
+    // of the buffer sum in getTotalCompleted() to give a true lifetime count.
+    uint32_t lifetime_overflow = 0;
 
     // Helper methods
     uint32_t getTodayEpochDays() const;
@@ -81,6 +87,9 @@ private:
     void loadTodayCache();
     void saveTodayCache();
     void ensureTodayExists();
+    // Read the raw slot regardless of which day it currently belongs to. Used
+    // to harvest a slot's count into overflow before overwriting it.
+    bool readRawSlot(uint8_t index, DayStats& out) const;
 };
 
 #endif // STATISTICS_H

@@ -353,6 +353,10 @@ void setup() {
     g_stateMachine->setHapticController(g_hapticController);
     Serial.println("[OK] Haptic controller connected to state machine");
 
+    // Persistent stats sink — TIMEOUT records work/break sessions to NVS
+    g_stateMachine->setStatistics(g_statistics);
+    Serial.println("[OK] Statistics connected to state machine");
+
     // Register timeout callback for auto-start logic
     g_stateMachine->onTimeout([]() {
         // After session completes and sequence advances, check if we should auto-start

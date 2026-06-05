@@ -1,4 +1,5 @@
 #include "TimerStateMachine.h"
+#include "Statistics.h"
 #include "../utils/MutexGuard.h"
 #include <Arduino.h>
 
@@ -67,9 +68,17 @@ bool TimerStateMachine::handleEvent(Event event) {
 
         case Event::TIMEOUT:
             if (state == State::ACTIVE) {
-                // Increment completed count for work sessions
-                if (sequence.isWorkSession()) {
+                // Record the just-completed session into both the breadcrumb
+                // (PomodoroSequence) and the persistent NVS stats log.
+                // Capture the session info before advance() rewinds it.
+                auto finishing = sequence.getCurrentSession();
+                if (finishing.type == PomodoroSequence::SessionType::WORK) {
                     sequence.incrementCompletedToday();
+                    if (statistics) {
+                        statistics->recordWorkSession(finishing.duration_min, true);
+                    }
+                } else if (statistics) {
+                    statistics->recordBreakSession(finishing.duration_min);
                 }
 
                 // MP-51: Celebrate BEFORE advancing to long break (supports Study mode's 2 long breaks)

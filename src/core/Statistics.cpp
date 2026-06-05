@@ -23,7 +23,11 @@ bool Statistics::begin() {
     }
 
     initialized = true;
-    Serial.println("[Statistics] Initialized (90-day rolling window)");
+
+    // Lifetime overflow — sessions that have aged out of the 90-day buffer.
+    lifetime_overflow = prefs.getUInt(KEY_OVERFLOW, 0);
+    Serial.printf("[Statistics] Initialized (90-day rolling window, overflow=%lu)\n",
+                  (unsigned long)lifetime_overflow);
 
     // Load today's data into cache
     loadTodayCache();
@@ -157,17 +161,17 @@ void Statistics::getLast30Days(DayStats* out_array) const {
     }
 }
 
-uint16_t Statistics::getTotalCompleted() const {
+uint32_t Statistics::getTotalCompleted() const {
     if (!initialized) return 0;
 
-    // Sum all completed sessions across all days
-    uint16_t total = 0;
+    // Sum all completed sessions across the 90-day buffer, plus the overflow
+    // counter that absorbed counts from slots before they were overwritten.
+    uint32_t total = lifetime_overflow;
 
     for (uint8_t i = 0; i < MAX_DAYS; i++) {
         char key[16];
         snprintf(key, sizeof(key), "day_%u", i);
 
-        // Check if key exists first (avoid NVS "NOT_FOUND" errors)
         if (!const_cast<Preferences&>(prefs).isKey(key)) {
             continue;
         }
@@ -235,7 +239,8 @@ void Statistics::cleanup() {
     uint32_t today_days = getTodayEpochDays();
     uint32_t cutoff_days = today_days - MAX_DAYS;
 
-    // Iterate through all stored days and remove old ones
+    // Iterate through all stored days and remove old ones, folding their
+    // counts into overflow first so getTotalCompleted() doesn't drop them.
     for (uint8_t i = 0; i < MAX_DAYS; i++) {
         char key[16];
         snprintf(key, sizeof(key), "day_%u", i);
@@ -244,12 +249,15 @@ void Statistics::cleanup() {
         size_t len = sizeof(DayStats);
         if (prefs.getBytes(key, &stats, len)) {
             if (stats.date_epoch_days < cutoff_days) {
+                lifetime_overflow += stats.completed_sessions;
                 prefs.remove(key);
-                Serial.printf("[Statistics] Removed day %lu (too old)\n",
-                              stats.date_epoch_days);
+                Serial.printf("[Statistics] Removed day %lu (too old, +%u into overflow)\n",
+                              (unsigned long)stats.date_epoch_days,
+                              stats.completed_sessions);
             }
         }
     }
+    prefs.putUInt(KEY_OVERFLOW, lifetime_overflow);
 }
 
 void Statistics::clear() {
@@ -260,6 +268,7 @@ void Statistics::clear() {
 
     today_cache = DayStats();
     cache_valid = false;
+    lifetime_overflow = 0;  // prefs.clear() already wiped the NVS key
 }
 
 // Private methods
@@ -308,6 +317,24 @@ void Statistics::ensureTodayExists() {
     // New day or cache invalid
     Serial.printf("[Statistics] New day detected: %lu\n", today_days);
 
+    // Before overwriting the slot at today's index, harvest whatever count
+    // is currently sitting there into the lifetime overflow. The slot at
+    // today_days % 90 can only belong to today, day-90, day-180, ... so any
+    // mismatch means we're about to evict a historical day.
+    DayStats prev;
+    if (readRawSlot(getDayIndex(today_days), prev)) {
+        if (prev.date_epoch_days != 0 && prev.date_epoch_days != today_days) {
+            uint32_t before = lifetime_overflow;
+            lifetime_overflow += prev.completed_sessions;
+            prefs.putUInt(KEY_OVERFLOW, lifetime_overflow);
+            Serial.printf("[Statistics] Day %lu rolled into overflow (+%u sessions, overflow %lu -> %lu)\n",
+                          (unsigned long)prev.date_epoch_days,
+                          prev.completed_sessions,
+                          (unsigned long)before,
+                          (unsigned long)lifetime_overflow);
+        }
+    }
+
     today_cache.date_epoch_days = today_days;
     today_cache.completed_sessions = 0;
     today_cache.work_minutes = 0;
@@ -316,4 +343,19 @@ void Statistics::ensureTodayExists() {
 
     cache_valid = true;
     saveTodayCache();
+}
+
+bool Statistics::readRawSlot(uint8_t index, DayStats& out) const {
+    char key[16];
+    snprintf(key, sizeof(key), "day_%u", index);
+
+    if (!const_cast<Preferences&>(prefs).isKey(key)) {
+        return false;
+    }
+
+    size_t len = sizeof(DayStats);
+    if (!const_cast<Preferences&>(prefs).getBytes(key, &out, len)) {
+        return false;
+    }
+    return true;
 }

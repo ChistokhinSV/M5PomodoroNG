@@ -9,6 +9,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+// Forward declare to keep Statistics.h out of widely-included header
+class Statistics;
+
 /**
  * Timer state machine implementing Pomodoro technique states and transitions
  *
@@ -85,6 +88,9 @@ public:
     // Haptic controller (MP-27)
     void setHapticController(IHapticController* controller) { haptic_controller = controller; }
 
+    // Statistics sink — recordWorkSession/recordBreakSession fire from TIMEOUT
+    void setStatistics(Statistics* s) { statistics = s; }
+
     // Reset to IDLE
     void reset();
 
@@ -103,6 +109,7 @@ private:
     AudioCallback audio_callback = nullptr;
     ILEDController* led_controller = nullptr;  // MP-23: LED control
     IHapticController* haptic_controller = nullptr;  // MP-27: Haptic feedback
+    Statistics* statistics = nullptr;          // NVS-backed daily stats
 
     // Thread-safety (MP-47)
     SemaphoreHandle_t state_mutex_;  // Protects all state variables above
