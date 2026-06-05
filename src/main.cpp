@@ -10,6 +10,7 @@
 #include "ui/ScreenManager.h"
 #include "core/Config.h"
 #include "core/NetworkConfig.h"
+#include "network/AmazonRootCA.h"
 #include "core/TimeManager.h"
 #include "core/TimerStateMachine.h"
 #include "core/PomodoroSequence.h"
@@ -202,11 +203,19 @@ void setup() {
         if (g_networkConfig->load()) {
             Serial.println("[OK] Network configuration loaded from SD");
 
-            // Try to load SSL certificates (MP-74)
+            // Try to load SSL certificates (MP-74). loadCertificates() needs
+            // root_ca + device_cert + private_key on SD. Per-device cert + key
+            // are secrets and must come from SD, but the Amazon Root CA is a
+            // public PEM — fall back to the embedded copy when the SD doesn't
+            // have it, so users don't need to copy a third file.
             if (g_networkConfig->loadCertificates()) {
                 Serial.println("[OK] SSL certificates loaded");
             } else {
                 Serial.println("[WARN] SSL certificates not available - TLS connections disabled");
+            }
+            if (!g_networkConfig->getRootCA() || g_networkConfig->getRootCA()[0] == '\0') {
+                g_networkConfig->setRootCAFallback(AMAZON_ROOT_CA_1);
+                Serial.println("[OK] Using embedded Amazon Root CA 1");
             }
 
             // Note: Background NTP sync task will be launched later (non-blocking)
@@ -456,8 +465,13 @@ void setup() {
     }
     Serial.println("[OK] Network task created on Core 1 (10KB stack, priority 1)");
 
-    // Create Background NTP Sync Task (one-time, self-deleting)
-    if (g_networkConfig) {
+    // Create Background NTP Sync Task (one-time, self-deleting) ONLY when
+    // we're in webhook-only mode. In persistent (CloudSync.Enabled=true)
+    // mode, NetworkTask owns WiFi for its whole lifetime and syncs NTP after
+    // its own WiFi.begin -- otherwise this task's WiFi.disconnect() at the
+    // end of NTP sync would kill the MQTT/TLS session that was just opened.
+    bool cloud_persistent = g_networkConfig && g_networkConfig->getCloudSync().enabled;
+    if (g_networkConfig && !cloud_persistent) {
         BaseType_t ntp_result = xTaskCreatePinnedToCore(
             backgroundNTPSyncTask,  // Task function
             "ntp_sync",            // Task name
@@ -473,6 +487,8 @@ void setup() {
         } else {
             Serial.println("[WARN] Failed to create background NTP sync task");
         }
+    } else if (cloud_persistent) {
+        Serial.println("[OK] CloudSync persistent mode -- NetworkTask owns NTP sync");
     }
 
     Serial.println("\n=== Multi-core Architecture Active ===");

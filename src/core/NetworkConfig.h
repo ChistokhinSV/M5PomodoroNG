@@ -54,6 +54,7 @@ public:
         char broker[128] = "";                // MQTT broker hostname (e.g., xxx.iot.region.amazonaws.com)
         uint16_t port = 8883;                 // MQTT port (8883 for TLS)
         char client_id[32] = "";              // MQTT client ID
+        char thing_name[32] = "";             // AWS IoT Thing name (shadow topic). Defaults to client_id if empty.
         uint16_t keepalive = 60;              // Keep-alive interval (seconds)
     };
 
@@ -183,6 +184,14 @@ public:
     const char* getRootCA() const { return root_ca_content; }
 
     /**
+     * Install an externally-owned PEM string as the root CA. Used by main.cpp
+     * to fall back to the embedded Amazon Root CA when SD didn't provide one.
+     * The buffer must outlive NetworkConfig (typically a static const). Does
+     * NOT take ownership and will not free() it in freeBuffers().
+     */
+    void setRootCAFallback(const char* pem);
+
+    /**
      * Get device certificate content (PEM format)
      * @return Null-terminated PEM string, or nullptr if not loaded
      */
@@ -221,6 +230,9 @@ private:
     char* root_ca_content = nullptr;
     char* device_cert_content = nullptr;
     char* private_key_content = nullptr;
+    // True when root_ca_content points at a static buffer owned by someone
+    // else (e.g. the embedded Amazon Root CA) — freeBuffers() must skip free().
+    bool root_ca_external = false;
 
     // Constants
     static constexpr const char* CONFIG_FILE = "/config/network.ini";

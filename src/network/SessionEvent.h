@@ -14,21 +14,26 @@ enum class SessionEvent : uint8_t {
     WORK_COMPLETE  = 1 << 0,   // work session timed out
     BREAK_COMPLETE = 1 << 1,   // short or long break timed out
     CYCLE_COMPLETE = 1 << 2,   // last work of the cycle finished (also fires WORK_COMPLETE)
+    STATE_CHANGED  = 1 << 3,   // TimerStateMachine entered a new state (IDLE/ACTIVE/PAUSED)
 };
 
 // Convenience: "subscribe to everything"
 static constexpr uint8_t SESSION_EVENT_ALL = 0xFF;
 
-// Producer payload (Core 0) → Consumer (Core 1). 16 bytes — fits comfortably
-// in any FreeRTOS queue. Timestamp is Unix epoch from M5.Rtc.
+// Producer payload (Core 0) → Consumer (Core 1). Timestamp is Unix epoch
+// from M5.Rtc. device_state / session_type / remaining_sec are populated for
+// STATE_CHANGED; completion events leave remaining_sec at 0.
 struct SessionEventMessage {
     SessionEvent type;
-    uint32_t timestamp;
-    uint16_t duration_min;     // duration of the just-completed session
-    uint8_t  session_number;   // 1-based within the current cycle (PomodoroSequence)
-    uint8_t  total_sessions;   // sessions per cycle
+    uint8_t  device_state;     // 0=IDLE, 1=ACTIVE, 2=PAUSED (TimerStateMachine::State)
+    uint8_t  session_type;     // 0=WORK, 1=SHORT_BREAK, 2=LONG_BREAK (current session)
+    uint8_t  session_number;   // 1-based work session inside the current cycle
+    uint8_t  total_sessions;   // work sessions per cycle
+    uint16_t duration_min;     // duration of the relevant session
+    uint16_t remaining_sec;    // for STATE_CHANGED + ACTIVE/PAUSED only
     uint16_t today_count;      // completed work sessions today (Statistics)
     uint16_t week_count;       // rolling 7-day total
+    uint32_t timestamp;
 };
 
 // Human-readable name used for JSON payloads and log lines.

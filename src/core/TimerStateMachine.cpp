@@ -6,6 +6,20 @@
 #include <Arduino.h>
 #include <time.h>
 
+namespace {
+// Send an event to the network task. On full, drop oldest so the freshest
+// event still gets through (webhooks/shadow can't catch up to a backed-up
+// queue anyway).
+void pushSessionEvent(const SessionEventMessage& m) {
+    if (!g_sessionEventQueue) return;
+    if (xQueueSend(g_sessionEventQueue, &m, 0) == pdTRUE) return;
+    SessionEventMessage dropped;
+    xQueueReceive(g_sessionEventQueue, &dropped, 0);
+    xQueueSend(g_sessionEventQueue, &m, 0);
+    Serial.println("[StateMachine] WARN: sessionEventQueue full, dropped oldest");
+}
+}  // namespace
+
 TimerStateMachine::TimerStateMachine(PomodoroSequence& seq)
     : sequence(seq),
       state(State::IDLE),
@@ -108,11 +122,14 @@ bool TimerStateMachine::handleEvent(Event event) {
                 // Fan out a SessionEvent for webhook / shadow consumers. Work
                 // sessions emit WORK_COMPLETE; the cycle-ending one ALSO emits
                 // CYCLE_COMPLETE so a webhook can subscribe to just cycle ends.
-                // Break sessions emit BREAK_COMPLETE. Queue is bounded; on full
-                // we drop oldest so the most recent event still gets through.
-                if (g_sessionEventQueue) {
+                // Break sessions emit BREAK_COMPLETE. device_state is still
+                // ACTIVE here — the transition to IDLE happens below and will
+                // emit its own STATE_CHANGED event from enterState().
+                {
                     SessionEventMessage ev{};
                     ev.timestamp      = static_cast<uint32_t>(time(nullptr));
+                    ev.device_state   = static_cast<uint8_t>(State::ACTIVE);
+                    ev.session_type   = static_cast<uint8_t>(finishing.type);
                     ev.duration_min   = finishing.duration_min;
                     ev.session_number = finishing_work_session;
                     ev.total_sessions = total_work_sessions;
@@ -121,24 +138,16 @@ bool TimerStateMachine::handleEvent(Event event) {
                         ev.week_count  = statistics->getLast7DaysTotal();
                     }
 
-                    auto push = [](const SessionEventMessage& m) {
-                        if (xQueueSend(g_sessionEventQueue, &m, 0) == pdTRUE) return;
-                        SessionEventMessage dropped;
-                        xQueueReceive(g_sessionEventQueue, &dropped, 0);
-                        xQueueSend(g_sessionEventQueue, &m, 0);
-                        Serial.println("[StateMachine] WARN: sessionEventQueue full, dropped oldest");
-                    };
-
                     if (finishing.type == PomodoroSequence::SessionType::WORK) {
                         ev.type = SessionEvent::WORK_COMPLETE;
-                        push(ev);
+                        pushSessionEvent(ev);
                         if (cycle_completed) {
                             ev.type = SessionEvent::CYCLE_COMPLETE;
-                            push(ev);
+                            pushSessionEvent(ev);
                         }
                     } else {
                         ev.type = SessionEvent::BREAK_COMPLETE;
-                        push(ev);
+                        pushSessionEvent(ev);
                     }
                 }
 
@@ -424,6 +433,27 @@ void TimerStateMachine::enterState(State new_state) {
             // Keep remaining_ms intact
             // Note: PauseScreen overrides LED pattern with RED BLINK
             break;
+    }
+
+    // Notify the network task. Same shape the TIMEOUT branch uses, with the
+    // current state baked into device_state. ShadowPublisher consumes this to
+    // rebuild the "reported" state document; webhooks subscribed with Events=*
+    // get state pings too (use the filter to opt out).
+    {
+        SessionEventMessage ev{};
+        ev.type           = SessionEvent::STATE_CHANGED;
+        ev.timestamp      = static_cast<uint32_t>(time(nullptr));
+        ev.device_state   = static_cast<uint8_t>(new_state);
+        ev.session_type   = static_cast<uint8_t>(sequence.getCurrentSession().type);
+        ev.duration_min   = sequence.getCurrentSession().duration_min;
+        ev.session_number = sequence.getCurrentWorkSession();
+        ev.total_sessions = sequence.getTotalWorkSessions();
+        ev.remaining_sec  = static_cast<uint16_t>(remaining_ms / 1000U);
+        if (statistics) {
+            ev.today_count = statistics->getToday().completed_sessions;
+            ev.week_count  = statistics->getLast7DaysTotal();
+        }
+        pushSessionEvent(ev);
     }
 }
 

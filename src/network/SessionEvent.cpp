@@ -8,6 +8,7 @@ const char* sessionEventName(SessionEvent e) {
         case SessionEvent::WORK_COMPLETE:  return "work_complete";
         case SessionEvent::BREAK_COMPLETE: return "break_complete";
         case SessionEvent::CYCLE_COMPLETE: return "cycle_complete";
+        case SessionEvent::STATE_CHANGED:  return "state_changed";
         case SessionEvent::NONE:           return "none";
     }
     return "unknown";
@@ -19,6 +20,7 @@ constexpr NameMask EVENT_TABLE[] = {
     {"work_complete",  static_cast<uint8_t>(SessionEvent::WORK_COMPLETE)},
     {"break_complete", static_cast<uint8_t>(SessionEvent::BREAK_COMPLETE)},
     {"cycle_complete", static_cast<uint8_t>(SessionEvent::CYCLE_COMPLETE)},
+    {"state_changed",  static_cast<uint8_t>(SessionEvent::STATE_CHANGED)},
 };
 
 // Lowercase, trim leading/trailing whitespace in place. Returns the new length.

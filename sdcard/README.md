@@ -169,13 +169,97 @@ JSON payload:
 }
 ```
 
-WiFi is on-demand: the device connects when a session ends, fires
-the configured webhooks sequentially, and disconnects. Battery cost
-is roughly one ~5-second WiFi burst per session boundary.
+WiFi is on-demand when **only** webhooks are configured: the device
+connects when a session ends, fires the configured webhooks
+sequentially, and disconnects. Battery cost is roughly one
+~5-second WiFi burst per session boundary.
 
-Service-specific integrations (Toggl, Google Calendar, etc.) live
-in a server-side companion app driven by the MQTT device shadow —
-not in the firmware. That arrives in the next firmware slice.
+When the AWS IoT shadow path is enabled (next section), WiFi stays
+**persistent** instead — needed for MQTT keepalive + delta delivery.
+
+---
+
+## AWS IoT Device Shadow
+
+Set `[CloudSync] Enabled=true` and provide AWS IoT credentials to
+have the device publish state to a Device Shadow and accept
+server-side commands. Service-specific integrations (Toggl,
+Google Calendar, etc.) live in a companion server-side app that
+subscribes to the shadow — not in the firmware.
+
+**Setup steps:**
+
+1. **Create an AWS IoT Thing** (one-time per device). AWS Console >
+   IoT Core > Manage > Things > Create things > Single thing.
+   Give it a name (e.g. `M5StackCore2`).
+
+2. **Create + attach a certificate.** During Thing creation, choose
+   "Auto-generate a new certificate". Download all four files: the
+   `*-certificate.pem.crt`, the `*-private.pem.key`, the
+   `*-public.pem.key` (not needed at runtime), and
+   `AmazonRootCA1.pem`. **The private key is shown ONCE** — save
+   it now or you'll have to create a fresh cert.
+
+3. **Attach an IoT policy** that allows the shadow operations.
+   Minimum permissions:
+   ```json
+   {
+     "Version": "2012-10-17",
+     "Statement": [
+       { "Effect": "Allow", "Action": "iot:Connect",
+         "Resource": "arn:aws:iot:<region>:<account>:client/M5StackCore2" },
+       { "Effect": "Allow",
+         "Action": ["iot:Publish", "iot:Receive"],
+         "Resource": "arn:aws:iot:<region>:<account>:topic/$aws/things/M5StackCore2/shadow/*" },
+       { "Effect": "Allow", "Action": "iot:Subscribe",
+         "Resource": "arn:aws:iot:<region>:<account>:topicfilter/$aws/things/M5StackCore2/shadow/*" }
+     ]
+   }
+   ```
+
+4. **Copy two files to the SD card** at `/config/certs/`:
+   - `device-certificate.pem.crt` (rename the long hash filename)
+   - `device-private.pem.key`
+   `AmazonRootCA1.pem` is optional — the firmware has an embedded
+   copy that's used automatically if SD doesn't provide one.
+
+5. **Edit `/config/network.ini` `[MQTT]` and `[CloudSync]`:**
+   ```ini
+   [MQTT]
+   Broker=<your>-ats.iot.<region>.amazonaws.com   ; from IoT Settings
+   ClientID=M5StackCore2
+   ThingName=M5StackCore2
+   [CloudSync]
+   Enabled=true
+   ```
+
+6. **Flash and watch serial.** You should see:
+   ```
+   [MQTT] Connecting to ...
+   [MQTT] Connected as M5StackCore2 in NNNN ms
+   [Shadow] Subscribe $aws/things/M5StackCore2/shadow/update/delta: OK
+   [Shadow] Snapshot publish: OK
+   ```
+
+**Reported state** (server can read at any time):
+
+```json
+{ "state": { "reported": {
+    "fw_version": "2.0.0",
+    "device_state": "active",
+    "session_type": "work",
+    "session_number": 3, "total_sessions": 4,
+    "duration_min": 25, "remaining_sec": 1234,
+    "today": 5, "week": 18, "lifetime": 847,
+    "last_event": "work_complete", "last_event_at": 1717612345
+}}}
+```
+
+**Delta protocol** (server → device commands): set
+`"state": { "command": "<verb>", "command_id": "<your-id>" }` in
+the shadow's desired state. The firmware acts on the verb, then
+publishes a reported state echoing the command + id so the delta
+clears. Verbs: `start`, `pause`, `resume`, `skip`, `stop`.
 
 ### 4. (Optional) Setup SSL Certificates
 

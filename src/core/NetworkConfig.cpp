@@ -90,6 +90,16 @@ bool NetworkConfig::loadIniFile() {
 
     mqtt.keepalive = ini.geti("MQTT", "KeepAlive", 60);
 
+    // ThingName drives the shadow topic ($aws/things/<name>/shadow/...).
+    // Defaults to client_id since that's the common case.
+    String thing_name = ini.gets("MQTT", "ThingName", "");
+    if (thing_name.length() > 0) {
+        strncpy(mqtt.thing_name, thing_name.c_str(), sizeof(mqtt.thing_name) - 1);
+    } else {
+        strncpy(mqtt.thing_name, mqtt.client_id, sizeof(mqtt.thing_name) - 1);
+    }
+    mqtt.thing_name[sizeof(mqtt.thing_name) - 1] = '\0';
+
     // Load certificate paths
     String root_ca = ini.gets("Certificates", "RootCA", "");
     if (root_ca.length() > 0) {
@@ -289,23 +299,23 @@ bool NetworkConfig::loadCertFile(const char* path, char** buffer, size_t max_siz
         return false;
     }
 
-    // Allocate buffer (prefer PSRAM if available)
+    // Allocate buffer. Prefer INTERNAL heap (not PSRAM) — mbedtls's TLS
+    // handshake hangs/fails when WiFiClientSecure reads PEM bytes from
+    // PSRAM-backed buffers (cache/DMA coherency issue on ESP32). Cert + key
+    // total ~3 KB; internal heap has plenty. PSRAM is a fallback only if
+    // the internal heap is exhausted.
     size_t alloc_size = content.length() + 1;  // +1 for null terminator
 
-    if (psramFound()) {
+    *buffer = (char*)heap_caps_malloc(alloc_size, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+    if (*buffer != nullptr) {
+        Serial.printf("[NetworkConfig] Allocated %d bytes in internal heap for %s\n",
+                      alloc_size, path);
+    } else if (psramFound()) {
+        // Internal heap exhausted — try PSRAM. TLS handshake may misbehave.
         *buffer = (char*)heap_caps_malloc(alloc_size, MALLOC_CAP_SPIRAM);
         if (*buffer != nullptr) {
-            Serial.printf("[NetworkConfig] Allocated %d bytes in PSRAM for %s\n",
-                         alloc_size, path);
-        }
-    }
-
-    // Fallback to regular heap if PSRAM unavailable or allocation failed
-    if (*buffer == nullptr) {
-        *buffer = (char*)malloc(alloc_size);
-        if (*buffer != nullptr) {
-            Serial.printf("[NetworkConfig] Allocated %d bytes in heap for %s\n",
-                         alloc_size, path);
+            Serial.printf("[NetworkConfig] WARN: fell back to PSRAM for %s — TLS may fail\n",
+                          path);
         }
     }
 
@@ -335,10 +345,23 @@ bool NetworkConfig::validatePEMFormat(const char* content, const char* expected_
     return true;
 }
 
+void NetworkConfig::setRootCAFallback(const char* pem) {
+    if (!pem) return;
+    // If we already own a heap/PSRAM buffer for the CA, release it before
+    // pointing at the external (static) PEM.
+    if (root_ca_content != nullptr && !root_ca_external) {
+        free(root_ca_content);
+    }
+    root_ca_content = const_cast<char*>(pem);
+    root_ca_external = true;
+}
+
 void NetworkConfig::freeBuffers() {
     if (root_ca_content != nullptr) {
-        free(root_ca_content);
+        // Skip free() when the CA buffer is owned externally (embedded PEM).
+        if (!root_ca_external) free(root_ca_content);
         root_ca_content = nullptr;
+        root_ca_external = false;
     }
 
     if (device_cert_content != nullptr) {

@@ -25,33 +25,39 @@ Password=YourWiFiPassword
 Broker=a3xxxxxxxxxx-ats.iot.us-east-1.amazonaws.com
 Port=8883
 
-# MQTT client ID (must be unique per device)
-# Recommendation: Use m5-pomodoro-<last 6 hex of MAC address>
-# You can find MAC address in serial monitor on boot
-# Example: If MAC is 11:22:33:44:A1:B2, use m5-pomodoro-A1B2C3
-ClientID=m5-pomodoro-XXXXXX
+# MQTT client ID. AWS IoT requires this to be unique per device. By
+# convention we set it equal to the AWS Thing name so the shadow topic
+# matches automatically.
+ClientID=M5StackCore2
+
+# AWS IoT Thing name. Shadow topic = $aws/things/<ThingName>/shadow/...
+# If empty, defaults to ClientID above.
+ThingName=M5StackCore2
 
 # MQTT keep-alive interval in seconds
 KeepAlive=60
 
 [Certificates]
-# SSL/TLS certificate file paths (relative to SD card root)
-# These files MUST exist for secure AWS IoT connection
-# See config/certs/README.md for setup instructions
+# SSL/TLS certificate file paths (relative to SD card root).
+# DeviceCert and PrivateKey MUST exist for AWS IoT connection -- they are
+# per-device secrets and are not bundled in the firmware.
+# RootCA is OPTIONAL: if missing or empty, the firmware falls back to an
+# embedded copy of Amazon Root CA 1.
 RootCA=/config/certs/AmazonRootCA1.pem
 DeviceCert=/config/certs/device-certificate.pem.crt
 PrivateKey=/config/certs/device-private.pem.key
 
 [CloudSync]
-# Enable or disable AWS IoT Device Shadow synchronization
-# Set to false if you don't want cloud sync (device works offline)
+# Master switch for AWS IoT Device Shadow sync. When true, the firmware
+# enters persistent-WiFi mode: it stays connected to MQTT continuously,
+# publishes a "reported" shadow on every state change / session event,
+# and subscribes to /shadow/update/delta for server -> device commands
+# (start / pause / resume / skip / stop).
+# When false, MQTT is disabled and WiFi is on-demand (webhooks only).
 Enabled=true
 
-# Sync interval in minutes (how often to push statistics to cloud)
-# Recommendations:
-#   5 minutes = Performance mode (more frequent updates, more battery drain)
-#   10 minutes = Balanced mode
-#   30 minutes = Battery saver mode (less frequent updates, longer battery life)
+# Sync interval in minutes (reserved for future throttling of state-tick
+# publishes; not currently used).
 SyncIntervalMin=5
 
 [NTP]
