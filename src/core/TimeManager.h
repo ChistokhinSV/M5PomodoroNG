@@ -69,6 +69,7 @@ public:
     // Midnight detection
     bool isMidnightCrossed();          // Check if we crossed midnight since last call
     uint32_t getSecondsSinceMidnight() const;
+    uint8_t getCurrentWeekday() const; // 0=Mon, 1=Tue, ..., 6=Sun
 
     // Timezone management
     void setUTCOffset(int32_t seconds) { utc_offset_sec = seconds; }

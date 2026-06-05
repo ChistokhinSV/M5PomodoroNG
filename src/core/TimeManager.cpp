@@ -196,6 +196,13 @@ uint32_t TimeManager::getSecondsSinceMidnight() const {
     return current_epoch - day_start;
 }
 
+uint8_t TimeManager::getCurrentWeekday() const {
+    // Return 0=Mon..6=Sun. struct tm gives 0=Sun..6=Sat, so rotate.
+    struct tm timeinfo;
+    getLocalTime(timeinfo);
+    return static_cast<uint8_t>((timeinfo.tm_wday + 6) % 7);
+}
+
 void TimeManager::update() {
     if (!time_synced) {
         return;  // Nothing to update

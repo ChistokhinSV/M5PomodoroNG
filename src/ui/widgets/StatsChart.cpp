@@ -33,6 +33,14 @@ void StatsChart::setMaxValue(uint8_t max) {
     markDirty();
 }
 
+void StatsChart::setTodayWeekday(uint8_t dow) {
+    if (dow > 6) return;
+    if (today_weekday_ != dow) {
+        today_weekday_ = dow;
+        markDirty();
+    }
+}
+
 void StatsChart::draw(Renderer& renderer) {
     if (!visible_) return;
 
@@ -103,10 +111,12 @@ void StatsChart::draw(Renderer& renderer) {
             }
         }
 
-        // Draw day label below bar
+        // Day label: bar i represents (6 - i) days ago. Rotate the weekday
+        // letters so the rightmost bar (i=6) lands on today.
+        uint8_t weekday = (today_weekday_ + 7 - (6 - i)) % 7;
         renderer.setTextDatum(MC_DATUM);
         renderer.drawString(x + bar_width / 2, baseline_y + 8,
-                           DAY_LABELS[i], &fonts::Font0,
+                           WEEKDAY_LETTERS[weekday], &fonts::Font0,
                            Renderer::Color(TFT_LIGHTGRAY));
 
         x += bar_width + BAR_SPACING;
