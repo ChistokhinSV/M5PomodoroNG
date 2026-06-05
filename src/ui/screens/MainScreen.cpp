@@ -9,9 +9,11 @@ extern ILEDController* g_ledController;
 
 MainScreen::MainScreen(TimerStateMachine& state_machine,
                        PomodoroSequence& sequence,
+                       Statistics& statistics,
                        NavigationCallback navigate_callback)
     : state_machine_(state_machine),
       sequence_(sequence),
+      statistics_(statistics),
       navigate_callback_(navigate_callback),
       last_update_ms_(0) {
     // Note: needs_redraw_ inherited from Screen base class, initialized to false
@@ -107,6 +109,15 @@ void MainScreen::update(uint32_t deltaMs) {
     progress_bar_.update(deltaMs);
     sequence_indicator_.update(deltaMs);
 
+    // Today-counter change detection. Catches session completion (count goes up)
+    // and midnight rollover (count drops to 0 — Statistics::getToday rotates the
+    // cache when epoch_days changes). draw() only runs when needs_redraw_ is set.
+    uint16_t today_now = statistics_.getToday().completed_sessions;
+    if (today_now != last_displayed_today_count_) {
+        last_displayed_today_count_ = today_now;
+        needs_redraw_ = true;
+    }
+
     // --- BtnA long-press detection (IDLE state) ---
     // onButtonA() seeded btn_a_press_start_ on wasPressed. Here we watch the
     // ongoing hold to trigger the dialog at the threshold, and to fall back to
@@ -146,47 +157,6 @@ void MainScreen::update(uint32_t deltaMs) {
     }
 
     needs_redraw_ = true;
-}
-
-void MainScreen::draw(Renderer& renderer) {
-    if (!needs_redraw_) return;
-
-    // Clear background
-    renderer.clear(Renderer::Color(TFT_BLACK));
-
-    // Draw status bar at top
-    status_bar_.draw(renderer);
-
-    // Draw mode label and session info
-    drawModeLabel(renderer);
-
-    // Draw sequence indicator dots
-    sequence_indicator_.draw(renderer);
-
-    // Draw large timer display
-    drawTimer(renderer);
-
-    // Draw progress bar only when timer is active
-    auto state = state_machine_.getState();
-    if (state == TimerStateMachine::State::ACTIVE ||
-        state == TimerStateMachine::State::PAUSED) {
-        progress_bar_.draw(renderer);
-    }
-
-    // Draw task name
-    drawTaskName(renderer);
-
-    // Long-press progress bar (over the top, only while a hold is in progress)
-    drawLongPressProgress(renderer);
-
-    // Reset confirmation dialog goes on top of everything else
-    if (reset_dialog_visible_) {
-        drawResetDialog(renderer);
-    }
-
-    // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
-
-    needs_redraw_ = false;
 }
 
 void MainScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
@@ -313,6 +283,49 @@ void MainScreen::drawResetDialog(Renderer& renderer) {
                         &fonts::Font4, Renderer::Color(TFT_WHITE));
 }
 
+void MainScreen::draw(Renderer& renderer) {
+    if (!needs_redraw_) return;
+
+    // Clear background
+    renderer.clear(Renderer::Color(TFT_BLACK));
+
+    // Draw status bar at top
+    status_bar_.draw(renderer);
+
+    // Draw mode label and session info
+    drawModeLabel(renderer);
+
+    // Draw sequence indicator dots
+    sequence_indicator_.draw(renderer);
+
+    // Draw large timer display
+    drawTimer(renderer);
+
+    // Draw progress bar only when timer is active
+    auto state = state_machine_.getState();
+    if (state == TimerStateMachine::State::ACTIVE ||
+        state == TimerStateMachine::State::PAUSED) {
+        progress_bar_.draw(renderer);
+    }
+
+    // Draw task name
+    drawTaskName(renderer);
+
+    // Long-press progress bar (over the top, only while a hold is in progress)
+    drawLongPressProgress(renderer);
+
+    // Reset confirmation dialog goes on top of everything else
+    if (reset_dialog_visible_) {
+        drawResetDialog(renderer);
+    }
+
+    // Hardware buttons drawn by ScreenManager (HardwareButtonBar)
+
+    needs_redraw_ = false;
+}
+
+// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
+
 void MainScreen::drawModeLabel(Renderer& renderer) {
     // Draw "Session X/Y" text (work sessions only)
     char label[32];
@@ -330,9 +343,12 @@ void MainScreen::drawModeLabel(Renderer& renderer) {
     renderer.drawString(SCREEN_WIDTH / 2, y, label,
                        &fonts::Font2, Renderer::Color(TFT_CYAN));
 
-    // Draw today's completion count badge
+    // Today's completed Pomodoros — sourced from Statistics (NVS-backed) so
+    // the counter auto-resets at midnight via Statistics::ensureTodayExists().
+    // PomodoroSequence's completed_today is still used for the breadcrumb dots.
     char count_str[8];
-    snprintf(count_str, sizeof(count_str), "%d", sequence_.getCompletedToday());
+    uint16_t today_count = statistics_.getToday().completed_sessions;
+    snprintf(count_str, sizeof(count_str), "%u", today_count);
     renderer.setTextDatum(TR_DATUM);  // Top-right
     renderer.drawString(SCREEN_WIDTH - 10, y, count_str,
                        &fonts::Font4, Renderer::Color(TFT_GREEN));
@@ -416,6 +432,15 @@ void MainScreen::updateButtons() {
 
 // Hardware button interface implementation
 void MainScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) {
+    // Reset confirm dialog takes over the labels while open so the user can see
+    // which hardware button does what (matches the on-screen Yes/No buttons).
+    if (reset_dialog_visible_) {
+        btnA = "No";       // Cancel reset
+        btnB = "";
+        btnC = "Yes";      // Confirm reset
+        return;
+    }
+
     // BtnA label depends on timer state (Start/Pause/Resume)
     auto state = state_machine_.getState();
     if (state == TimerStateMachine::State::IDLE) {

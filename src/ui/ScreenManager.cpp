@@ -8,7 +8,7 @@ ScreenManager::ScreenManager(TimerStateMachine& state_machine,
                              Config& config,
                              ILEDController& led_controller,
                              IHapticController& haptic_controller)
-    : main_screen_(state_machine, sequence,
+    : main_screen_(state_machine, sequence, statistics,
                    [this](ScreenID screen) { this->navigate(screen); }),
       stats_screen_(statistics,
                     [this](ScreenID screen) { this->navigate(screen); }),
@@ -130,6 +130,11 @@ void ScreenManager::update(uint32_t deltaMs) {
             pause_screen_.update(deltaMs);
             break;
     }
+
+    // Refresh button-bar labels every frame so internal state changes inside
+    // the screen (e.g. reset dialog opening from a hold gesture) propagate
+    // without waiting for a button press. setLabels() no-ops if unchanged.
+    updateButtonLabels();
 }
 
 void ScreenManager::draw(Renderer& renderer) {

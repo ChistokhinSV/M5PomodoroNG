@@ -1,7 +1,10 @@
 #include "StatsScreen.h"
 #include "../ScreenManager.h"
+#include "../../core/TimeManager.h"
 #include <M5Unified.h>
 #include <stdio.h>
+
+extern TimeManager* g_timeManager;
 
 StatsScreen::StatsScreen(Statistics& statistics, NavigationCallback navigate_callback)
     : statistics_(statistics),
@@ -30,6 +33,9 @@ StatsScreen::StatsScreen(Statistics& statistics, NavigationCallback navigate_cal
 
     stats_chart_.setData(weekly_data);
     stats_chart_.setMaxValue(0);  // Auto-scale
+    if (g_timeManager) {
+        stats_chart_.setTodayWeekday(g_timeManager->getCurrentWeekday());
+    }
 }
 
 void StatsScreen::updateStatus(uint8_t battery, bool charging, bool wifi,
@@ -50,6 +56,29 @@ void StatsScreen::update(uint32_t deltaMs) {
         weekly_data[i] = last7[i].completed_sessions;
     }
     stats_chart_.setData(weekly_data);
+
+    // Refresh weekday alignment in case the screen sits open across midnight.
+    if (g_timeManager) {
+        stats_chart_.setTodayWeekday(g_timeManager->getCurrentWeekday());
+    }
+
+    // BtnC long-press → stats reset dialog. onButtonC() seeded btn_c_press_start_
+    // on wasPressed. Cross the threshold while still held → open the dialog.
+    // Short release → no action (BtnC has no short-press behavior on this screen).
+    if (btn_c_press_start_ != 0) {
+        if (M5.BtnC.isPressed()) {
+            if (!btn_c_long_press_consumed_ &&
+                !reset_dialog_visible_ &&
+                millis() - btn_c_press_start_ >= LONG_PRESS_MS) {
+                btn_c_long_press_consumed_ = true;
+                reset_dialog_visible_ = true;
+                Serial.println("[StatsScreen] BtnC long-press → stats reset dialog");
+            }
+        } else {
+            btn_c_press_start_ = 0;
+            btn_c_long_press_consumed_ = false;
+        }
+    }
 
     needs_redraw_ = true;
 }
@@ -75,13 +104,53 @@ void StatsScreen::draw(Renderer& renderer) {
     // Draw weekly stats chart
     stats_chart_.draw(renderer);
 
-    // Draw lifetime stats (Total + Avg)
+    // Draw lifetime stats (Total + Streak)
     drawLifetimeStats(renderer);
+
+    // Hold-progress bar (only visible while a BtnC hold is in flight)
+    drawLongPressProgress(renderer);
+
+    // Reset confirmation dialog goes on top of everything else
+    if (reset_dialog_visible_) {
+        drawResetDialog(renderer);
+    }
 
     needs_redraw_ = false;
 }
 
-// Note: handleTouch() inherited from Screen base class (delegates to TouchEventManager)
+void StatsScreen::handleTouch(int16_t x, int16_t y, bool pressed) {
+    // While the confirm dialog is open, hit-test Yes/No and swallow everything
+    // else so the chart/widgets underneath don't react.
+    if (reset_dialog_visible_) {
+        if (pressed) {
+            int16_t dx = (SCREEN_WIDTH - DIALOG_W) / 2;
+            int16_t dy = (SCREEN_HEIGHT - DIALOG_H) / 2;
+            int16_t btn_y = dy + DIALOG_H - DIALOG_BTN_H - 10;
+            int16_t no_x = dx + 20;
+            int16_t yes_x = dx + DIALOG_W - DIALOG_BTN_W - 20;
+
+            if (y >= btn_y && y <= btn_y + DIALOG_BTN_H) {
+                if (x >= no_x && x <= no_x + DIALOG_BTN_W) {
+                    Serial.println("[StatsScreen] Reset dialog: No");
+                    reset_dialog_visible_ = false;
+                    needs_redraw_ = true;
+                    return;
+                }
+                if (x >= yes_x && x <= yes_x + DIALOG_BTN_W) {
+                    Serial.println("[StatsScreen] Reset dialog: Yes");
+                    performStatsReset();
+                    reset_dialog_visible_ = false;
+                    needs_redraw_ = true;
+                    return;
+                }
+            }
+        }
+        return;  // Swallow everything else
+    }
+
+    // Otherwise defer to base for widget event dispatch
+    Screen::handleTouch(x, y, pressed);
+}
 
 void StatsScreen::drawTitle(Renderer& renderer) {
     // Draw "Statistics" title centered
@@ -92,41 +161,25 @@ void StatsScreen::drawTitle(Renderer& renderer) {
 }
 
 void StatsScreen::drawSummary(Renderer& renderer) {
-    // Draw Today and Streak stats
+    // Top row: Today (left) · Week (right)
     int16_t y = STATUS_BAR_HEIGHT + TITLE_HEIGHT + 15;
 
     // Today's count (left side)
     char today_str[16];
     Statistics::DayStats today = statistics_.getToday();
-    snprintf(today_str, sizeof(today_str), "Today: %d", today.completed_sessions);
+    snprintf(today_str, sizeof(today_str), "Today: %u", today.completed_sessions);
 
     renderer.setTextDatum(TL_DATUM);  // Top-left
     renderer.drawString(40, y, today_str,
                        &fonts::Font2, Renderer::Color(TFT_WHITE));
 
-    // Streak (right side) - calculate from last 7 days
-    char streak_str[20];
-    Statistics::DayStats last7[7];
-    statistics_.getLast7Days(last7);
-
-    // Count consecutive days with at least 1 session (from today backwards)
-    uint16_t streak = 0;
-    for (int8_t i = 6; i >= 0; i--) {  // 6 = today, 0 = 7 days ago
-        if (last7[i].completed_sessions > 0) {
-            streak++;
-        } else {
-            break;  // Streak broken
-        }
-    }
-
-    if (streak == 1) {
-        snprintf(streak_str, sizeof(streak_str), "Streak: 1 day");
-    } else {
-        snprintf(streak_str, sizeof(streak_str), "Streak: %d days", streak);
-    }
+    // Rolling 7-day total (right side)
+    char week_str[20];
+    snprintf(week_str, sizeof(week_str), "Week: %u",
+             statistics_.getLast7DaysTotal());
 
     renderer.setTextDatum(TR_DATUM);  // Top-right
-    renderer.drawString(SCREEN_WIDTH - 40, y, streak_str,
+    renderer.drawString(SCREEN_WIDTH - 40, y, week_str,
                        &fonts::Font2, Renderer::Color(TFT_GREEN));
 }
 
@@ -140,39 +193,62 @@ void StatsScreen::drawChartTitle(Renderer& renderer) {
 }
 
 void StatsScreen::drawLifetimeStats(Renderer& renderer) {
-    // Draw Total and Average stats at bottom
+    // Bottom row: Total (left) · Streak (right)
     int16_t y = SCREEN_HEIGHT - LIFETIME_HEIGHT - 5;
 
-    // Total (left side)
+    // Lifetime total (left side)
     char total_str[20];
-    uint16_t total = statistics_.getTotalCompleted();
-    snprintf(total_str, sizeof(total_str), "Total: %d", total);
+    snprintf(total_str, sizeof(total_str), "Total: %u",
+             statistics_.getTotalCompleted());
 
     renderer.setTextDatum(BL_DATUM);  // Bottom-left
     renderer.drawString(40, y, total_str,
                        &fonts::Font2, Renderer::Color(TFT_WHITE));
 
-    // 7-day average (right side)
-    char avg_str[20];
-    uint16_t week_total = statistics_.getLast7DaysTotal();
-    float avg = week_total / 7.0f;
+    // Streak = consecutive recent days with >=1 completed work session,
+    // counted backwards from today (last7[6] = today, last7[0] = 7 days ago).
+    Statistics::DayStats last7[7];
+    statistics_.getLast7Days(last7);
+    uint16_t streak = 0;
+    for (int8_t i = 6; i >= 0; i--) {
+        if (last7[i].completed_sessions > 0) {
+            streak++;
+        } else {
+            break;
+        }
+    }
 
-    snprintf(avg_str, sizeof(avg_str), "Avg: %.1f/day", avg);
+    char streak_str[20];
+    snprintf(streak_str, sizeof(streak_str),
+             streak == 1 ? "Streak: 1 day" : "Streak: %u days", streak);
 
     renderer.setTextDatum(BR_DATUM);  // Bottom-right
-    renderer.drawString(SCREEN_WIDTH - 40, y, avg_str,
+    renderer.drawString(SCREEN_WIDTH - 40, y, streak_str,
                        &fonts::Font2, Renderer::Color(TFT_CYAN));
 }
 
 // Hardware button interface implementation
 void StatsScreen::getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) {
-    btnA = "<- Back";  // Navigate to MainScreen
-    btnB = "";         // Unused
-    btnC = "";         // Unused
+    if (reset_dialog_visible_) {
+        btnA = "No";       // Cancel
+        btnB = "";
+        btnC = "Yes";      // Confirm
+        return;
+    }
+    btnA = "<- Back";      // Navigate to MainScreen
+    btnB = "";
+    btnC = "Reset";        // Hold 1.5s to open reset dialog
 }
 
 void StatsScreen::onButtonA() {
-    // Navigate back to MainScreen
+    // While the reset confirm is open, BtnA cancels (mirrors MainScreen UX).
+    if (reset_dialog_visible_) {
+        Serial.println("[StatsScreen] BtnA: Cancel reset dialog");
+        reset_dialog_visible_ = false;
+        needs_redraw_ = true;
+        return;
+    }
+    // Otherwise: navigate back to MainScreen
     Serial.println("[StatsScreen] BtnA: Navigate to Main");
     if (navigate_callback_) {
         navigate_callback_(ScreenID::MAIN);
@@ -180,9 +256,72 @@ void StatsScreen::onButtonA() {
 }
 
 void StatsScreen::onButtonB() {
-    // Unused
+    // Inert (including while dialog is open).
 }
 
 void StatsScreen::onButtonC() {
-    // Unused
+    if (reset_dialog_visible_) {
+        Serial.println("[StatsScreen] BtnC: Confirm stats reset");
+        performStatsReset();
+        reset_dialog_visible_ = false;
+        needs_redraw_ = true;
+        return;
+    }
+    // Otherwise seed the hold timer. update() watches BtnC.isPressed() and
+    // pops the dialog once LONG_PRESS_MS has elapsed.
+    btn_c_press_start_ = millis();
+    btn_c_long_press_consumed_ = false;
+}
+
+void StatsScreen::drawLongPressProgress(Renderer& renderer) {
+    // Thin growing bar across the top edge while BtnC is being held.
+    if (btn_c_press_start_ == 0) return;
+    uint32_t held = millis() - btn_c_press_start_;
+    if (held < 200) return;  // Grace period so quick taps don't flash
+
+    uint32_t clamped = held > LONG_PRESS_MS ? LONG_PRESS_MS : held;
+    int16_t fill_w = (int16_t)((SCREEN_WIDTH * clamped) / LONG_PRESS_MS);
+    int16_t y = STATUS_BAR_HEIGHT;
+    renderer.drawRect(0, y, SCREEN_WIDTH, 3, Renderer::Color(TFT_DARKGREY), true);
+    renderer.drawRect(0, y, fill_w, 3, Renderer::Color(TFT_ORANGE), true);
+}
+
+void StatsScreen::drawResetDialog(Renderer& renderer) {
+    int16_t dx = (SCREEN_WIDTH - DIALOG_W) / 2;
+    int16_t dy = (SCREEN_HEIGHT - DIALOG_H) / 2;
+
+    // Dim the screen behind the dialog so it reads as modal.
+    renderer.drawRect(0, 0, SCREEN_WIDTH, SCREEN_HEIGHT, Renderer::Color(TFT_BLACK), true);
+
+    // Dialog box
+    renderer.drawRect(dx, dy, DIALOG_W, DIALOG_H, Renderer::Color(TFT_NAVY), true);
+    renderer.drawRect(dx, dy, DIALOG_W, DIALOG_H, Renderer::Color(TFT_WHITE), false);
+
+    renderer.setTextDatum(TC_DATUM);
+    renderer.drawString(SCREEN_WIDTH / 2, dy + 12, "Reset stats?",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+    renderer.drawString(SCREEN_WIDTH / 2, dy + 42, "Wipes all daily history",
+                        &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
+
+    int16_t btn_y = dy + DIALOG_H - DIALOG_BTN_H - 10;
+    int16_t no_x = dx + 20;
+    int16_t yes_x = dx + DIALOG_W - DIALOG_BTN_W - 20;
+
+    renderer.drawRect(no_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_DARKGREY), true);
+    renderer.drawRect(no_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_WHITE), false);
+    renderer.setTextDatum(MC_DATUM);
+    renderer.drawString(no_x + DIALOG_BTN_W / 2, btn_y + DIALOG_BTN_H / 2, "No",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+
+    renderer.drawRect(yes_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_RED), true);
+    renderer.drawRect(yes_x, btn_y, DIALOG_BTN_W, DIALOG_BTN_H, Renderer::Color(TFT_WHITE), false);
+    renderer.drawString(yes_x + DIALOG_BTN_W / 2, btn_y + DIALOG_BTN_H / 2, "Yes",
+                        &fonts::Font4, Renderer::Color(TFT_WHITE));
+}
+
+void StatsScreen::performStatsReset() {
+    // Wipe the entire NVS stats namespace (90-day buffer + overflow). The next
+    // recordWorkSession() will re-create today's slot at zero.
+    statistics_.clear();
+    Serial.println("[StatsScreen] Statistics reset: NVS cleared");
 }

@@ -49,9 +49,10 @@ public:
     void update(uint32_t deltaMs) override;
     void updateStatus(uint8_t battery, bool charging, bool wifi, const char* mode, uint8_t hour, uint8_t minute) override;
     void getButtonLabels(const char*& btnA, const char*& btnB, const char*& btnC) override;
-    void onButtonA() override;  // Back to Main
+    void onButtonA() override;  // Back to Main  (or Cancel while reset dialog open)
     void onButtonB() override;  // (unused)
-    void onButtonC() override;  // (unused)
+    void onButtonC() override;  // Long-press: stats reset dialog. Confirm Yes while dialog open.
+    void handleTouch(int16_t x, int16_t y, bool pressed) override;
 
 private:
     Statistics& statistics_;
@@ -75,9 +76,27 @@ private:
 
     // Drawing helpers
     void drawTitle(Renderer& renderer);
-    void drawSummary(Renderer& renderer);       // Today + Streak
+    void drawSummary(Renderer& renderer);       // Today + Week
     void drawChartTitle(Renderer& renderer);
-    void drawLifetimeStats(Renderer& renderer); // Total + Avg
+    void drawLifetimeStats(Renderer& renderer); // Total + Streak
+
+    // --- BtnC long-press → reset all statistics ---
+    // Mirrors the BtnA hold pattern on MainScreen. Hold BtnC for 1.5s to open
+    // a confirm dialog; tap Yes (on-screen or BtnC) to wipe the NVS stats.
+    uint32_t btn_c_press_start_ = 0;     // 0 = not held; else millis() at press
+    bool btn_c_long_press_consumed_ = false;
+    bool reset_dialog_visible_ = false;
+    static constexpr uint32_t LONG_PRESS_MS = 1500;
+
+    // Reset-dialog layout (matches MainScreen sizing for consistency)
+    static constexpr int16_t DIALOG_W = 240;
+    static constexpr int16_t DIALOG_H = 110;
+    static constexpr int16_t DIALOG_BTN_W = 90;
+    static constexpr int16_t DIALOG_BTN_H = 32;
+
+    void drawLongPressProgress(Renderer& renderer);
+    void drawResetDialog(Renderer& renderer);
+    void performStatsReset();
 };
 
 #endif // STATSSCREEN_H

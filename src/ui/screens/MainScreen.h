@@ -10,6 +10,7 @@
 #include "../widgets/Button.h"
 #include "../../core/TimerStateMachine.h"
 #include "../../core/PomodoroSequence.h"
+#include "../../core/Statistics.h"
 
 #include <M5Unified.h>
 
@@ -46,6 +47,7 @@ class MainScreen : public Screen {
 public:
     MainScreen(TimerStateMachine& state_machine,
                PomodoroSequence& sequence,
+               Statistics& statistics,
                NavigationCallback navigate_callback);
 
     // Override Screen interface
@@ -64,6 +66,7 @@ public:
 private:
     TimerStateMachine& state_machine_;
     PomodoroSequence& sequence_;
+    Statistics& statistics_;
     NavigationCallback navigate_callback_;
 
     // Widgets
@@ -76,6 +79,12 @@ private:
     char task_name_[64];
     uint32_t last_update_ms_;
     int16_t TIMER_HEIGHT;
+
+    // Cached value of statistics_.getToday().completed_sessions; sentinel 0xFFFF
+    // forces an initial draw. update() compares each tick and trips needs_redraw_
+    // when it changes — catches both session completion and midnight rollover
+    // (Statistics::getToday rotates the per-day cache when epoch_days changes).
+    uint16_t last_displayed_today_count_ = 0xFFFF;
     // Note: needs_redraw_ inherited from Screen base class
 
     // Long-press → cycle-reset state. Two trigger paths:
@@ -83,6 +92,7 @@ private:
     //     enough, show the confirm dialog instead).
     //   - Touch held inside the timer digits area (any state).
     // Both draw a progress arc during the hold and pop the same confirm dialog.
+    // (Stats reset lives on the StatsScreen via BtnC long-press there.)
     uint32_t btn_a_press_start_ = 0;     // 0 = not held; else millis() at press
     bool btn_a_long_press_consumed_ = false;  // True once the hold tripped the dialog (skip Start on release)
     uint32_t timer_touch_press_start_ = 0;
