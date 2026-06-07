@@ -225,6 +225,11 @@ Resources:
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
               Resource: !GetAtt StateTable.Arn
+            # Used to write desired.task_name straight from work_started so
+            # the device LCD doesn't wait for the Toggl webhook roundtrip.
+            - Effect: Allow
+              Action: iot:UpdateThingShadow
+              Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:thing/${ThingName}
 
   TogglApiLogGroup:
     Type: AWS::Logs::LogGroup

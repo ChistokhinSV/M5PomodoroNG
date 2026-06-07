@@ -35,7 +35,27 @@ def fake_toggl(monkeypatch):
     fake.current_entry.return_value = None
     fake.start_entry.return_value = {"id": 999}
     fake.stop_entry.return_value = {"id": 999}
+    # Default project lookup is a no-op; tests that care about colour /
+    # name flow override .return_value themselves.
+    fake.get_project.return_value = None
     monkeypatch.setattr(toggl_api, "toggl_client", fake)
+    return fake
+
+
+@pytest.fixture(autouse=True)
+def fake_iot(monkeypatch):
+    """Stand-in for the IoT data-plane client. Captures every
+    update_thing_shadow payload as a list of (thing_name, parsed-state)
+    so tests can assert what task_name / project_color got pushed."""
+    fake = MagicMock()
+    pushed: list[tuple[str, dict]] = []
+    def update(*, thingName, payload):
+        import json as _json
+        pushed.append((thingName, _json.loads(payload)))
+        return {}
+    fake.update_thing_shadow.side_effect = update
+    monkeypatch.setattr(toggl_api, "_iot_data", fake)
+    fake.pushed = pushed
     return fake
 
 
@@ -156,3 +176,47 @@ def test_break_completed_is_noop(fake_toggl, fake_store):
     assert resp.get("skipped") == ev.DEVICE_BREAK_COMPLETED
     fake_toggl.start_entry.assert_not_called()
     fake_toggl.stop_entry.assert_not_called()
+
+
+def test_work_started_pushes_task_name_to_shadow(fake_toggl, fake_store, fake_iot):
+    """The whole point of this server-side push: device LCD shouldn't have
+    to wait 5–10 s for the Toggl webhook to round-trip back. After
+    start_entry, we resolve project name + colour and write desired
+    straight to the shadow."""
+    fake_toggl.get_project.return_value = {
+        "name": "Learning Networking", "color": "#0b83d9",
+    }
+    toggl_api.handler(_event(ev.DEVICE_WORK_STARTED), None)
+
+    fake_toggl.get_project.assert_called_once()
+    assert len(fake_iot.pushed) == 1
+    thing, payload = fake_iot.pushed[0]
+    assert thing == THING
+    desired = payload["state"]["desired"]
+    assert desired["task_name"] == "Learning Networking"
+    assert desired["project_color"] == "#0b83d9"
+
+
+def test_adopt_existing_entry_also_pushes_task_name(fake_toggl, fake_store, fake_iot):
+    """Loop guard adopts a running entry instead of starting; we still
+    need to push the project name down so the LCD label is right."""
+    fake_toggl.current_entry.return_value = {"id": 7777, "project_id": 555}
+    fake_toggl.get_project.return_value = {"name": "Adopted", "color": None}
+    toggl_api.handler(_event(ev.DEVICE_WORK_STARTED), None)
+
+    fake_toggl.start_entry.assert_not_called()
+    assert len(fake_iot.pushed) == 1
+    assert fake_iot.pushed[0][1]["state"]["desired"]["task_name"] == "Adopted"
+
+
+def test_no_project_id_skips_shadow_push(fake_toggl, fake_store, fake_iot, monkeypatch):
+    """If there's neither a default nor a stored project, we don't push —
+    a project_color or task_name we made up would be worse than no update."""
+    # Reconfigure: no default project in the secret.
+    monkeypatch.setattr(
+        toggl_api.sec, "get_secret",
+        lambda _: {"toggl": {"api_token": "t", "workspace_id": 11}},
+    )
+    toggl_api.handler(_event(ev.DEVICE_WORK_STARTED), None)
+    fake_toggl.get_project.assert_not_called()
+    assert fake_iot.pushed == []

@@ -13,6 +13,8 @@ import json
 import logging
 import os
 
+import boto3
+
 from shared import events as ev
 from shared import secrets as sec
 from shared import state_store
@@ -22,6 +24,11 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 CREDENTIALS_SECRET_ARN = os.environ["CREDENTIALS_SECRET_ARN"]
+REGION = os.environ.get("AWS_REGION", "eu-central-1")
+
+# IoT data-plane client for the desired.task_name push. Lazily instantiated
+# so unit tests don't pay the boto cost when they monkey-patch it out.
+_iot_data = boto3.client("iot-data", region_name=REGION)
 
 
 def _config() -> tuple[str, int, int | None, str | None]:
@@ -49,6 +56,12 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
          continue what they were last doing.
       2. Defaults from the m5pomodoro/toggl/api secret (project_id,
          default_description).
+
+    After we have the entry, we ALSO write desired.task_name (and
+    project_color) straight to the shadow. Without this the device LCD
+    would wait for the Toggl webhook to round-trip back through
+    source-toggl-webhook → consumer-task-context, which takes 5-10s and
+    leaves the device showing "Focus Session" placeholder in the meantime.
     """
     api_token, ws_id, default_project_id, default_desc = _config()
 
@@ -61,6 +74,9 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
         log.info("Adopting already-running Toggl entry %d for %s",
                  entry_id, thing_name)
         state_store.set_running_entry(thing_name, entry_id)
+        _push_task_name_for_project(
+            thing_name, api_token, ws_id, existing.get("project_id"),
+        )
         return
 
     # Pull stored context — only Toggl entries have project_id we trust here,
@@ -90,6 +106,45 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
     entry_id = int(entry["id"])
     state_store.set_running_entry(thing_name, entry_id)
     log.info("Started Toggl entry %d for %s", entry_id, thing_name)
+    _push_task_name_for_project(thing_name, api_token, ws_id, project_id)
+
+
+def _push_task_name_for_project(thing_name: str, api_token: str,
+                                workspace_id: int,
+                                project_id: int | None) -> None:
+    """Resolve project_id → name+color and write them onto the shadow's
+    desired state. Soft-fails — a network blip or deleted project must
+    never break the work-start flow."""
+    if not project_id:
+        return
+    try:
+        project = toggl_client.get_project(
+            api_token, workspace_id=workspace_id,
+            project_id=int(project_id),
+        )
+    except Exception as e:                          # noqa: BLE001
+        log.warning("get_project(%s) failed: %s", project_id, e)
+        return
+    if not project:
+        return
+
+    desired: dict = {}
+    name = (project.get("name") or "").strip()
+    if name:
+        desired["task_name"] = name
+    color = project.get("color")
+    if color:
+        desired["project_color"] = color
+    if not desired:
+        return
+
+    body = json.dumps({"state": {"desired": desired}}).encode("utf-8")
+    try:
+        _iot_data.update_thing_shadow(thingName=thing_name, payload=body)
+        log.info("Pushed desired %s -> shadow for %s",
+                 list(desired.keys()), thing_name)
+    except Exception as e:                          # noqa: BLE001
+        log.warning("update_thing_shadow failed for %s: %s", thing_name, e)
 
 
 def _on_work_paused_or_completed(thing_name: str, detail: dict) -> None:
