@@ -21,14 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # test file — the per-test `_set_env` fixture below still wins for any
 # fixture-driven mutation pytest needs.
 for _k, _v in (
-    ("AWS_REGION",          "eu-central-1"),
-    ("EVENT_BUS_NAME",      "m5pomodoro-events-test"),
-    ("STATE_TABLE_NAME",    "m5pomodoro-state-test"),
-    ("TARGET_THING_NAME",   "M5StackCoreTest"),
-    ("WEBHOOK_SECRET_ARN",  "arn:test:webhook"),
-    ("TOGGL_SECRET_ARN",    "arn:test:toggl"),
-    ("GCAL_SECRET_ARN",     "arn:test:gcal"),
-    ("CALENDAR_ID",         "primary"),
+    ("AWS_REGION",              "eu-central-1"),
+    ("EVENT_BUS_NAME",          "m5pomodoro-events-test"),
+    ("STATE_TABLE_NAME",        "m5pomodoro-state-test"),
+    ("TARGET_THING_NAME",       "M5StackCoreTest"),
+    ("CREDENTIALS_SECRET_ARN",  "arn:test:credentials"),
+    ("CALENDAR_ID",             "primary"),
 ):
     os.environ.setdefault(_k, _v)
 
@@ -61,7 +59,5 @@ def _set_env(monkeypatch):
     monkeypatch.setenv("EVENT_BUS_NAME", "m5pomodoro-events-test")
     monkeypatch.setenv("STATE_TABLE_NAME", "m5pomodoro-state-test")
     monkeypatch.setenv("TARGET_THING_NAME", "M5StackCoreTest")
-    monkeypatch.setenv("WEBHOOK_SECRET_ARN", "arn:test:webhook")
-    monkeypatch.setenv("TOGGL_SECRET_ARN", "arn:test:toggl")
-    monkeypatch.setenv("GCAL_SECRET_ARN", "arn:test:gcal")
+    monkeypatch.setenv("CREDENTIALS_SECRET_ARN", "arn:test:credentials")
     monkeypatch.setenv("CALENDAR_ID", "primary")

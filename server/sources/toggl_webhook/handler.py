@@ -34,10 +34,7 @@ log.setLevel(logging.INFO)
 
 # Env wiring: SAM template provides these at deploy time.
 TARGET_THING_NAME       = os.environ["TARGET_THING_NAME"]
-WEBHOOK_SECRET_ARN      = os.environ["WEBHOOK_SECRET_ARN"]
-# Optional — only needed for project-name resolution. If unset/missing the
-# webhook still works, just emits without project_name.
-TOGGL_API_SECRET_ARN    = os.environ.get("TOGGL_API_SECRET_ARN", "")
+CREDENTIALS_SECRET_ARN  = os.environ["CREDENTIALS_SECRET_ARN"]
 EVENT_BUS_NAME          = os.environ.get("EVENT_BUS_NAME", ev.DEFAULT_BUS)
 
 # Module-level cache so warm invocations don't re-hit Toggl for the same
@@ -59,13 +56,20 @@ def _response(status: int, body: dict | str = "") -> dict:
     }
 
 
+def _toggl_section() -> dict:
+    return sec.get_secret(CREDENTIALS_SECRET_ARN).get("toggl") or {}
+
+
 def _verify_signature(raw_body: bytes, header_sig: str) -> bool:
     """Toggl signs with HMAC-SHA256 hex of the raw request body, keyed by
     the per-webhook signing secret. Header form is
     `sha256=<64-hex-chars>`."""
     if not header_sig:
         return False
-    signing_secret = sec.get_secret(WEBHOOK_SECRET_ARN)["signing_secret"]
+    signing_secret = _toggl_section().get("webhook_signing_secret")
+    if not signing_secret:
+        log.warning("toggl.webhook_signing_secret missing from credentials")
+        return False
     expected = hmac.new(
         signing_secret.encode("utf-8"), raw_body, hashlib.sha256
     ).hexdigest()
@@ -79,15 +83,14 @@ def _resolve_project_info(project_id: int,
     """Look up Toggl's project display name and color. Returns (None, None)
     if we don't have Toggl credentials configured or if the API call fails —
     callers fall back to other label sources (and skip the GCal color)."""
-    if not project_id or not TOGGL_API_SECRET_ARN:
+    if not project_id:
         return None, None
     if project_id in _project_info_cache:
         return _project_info_cache[project_id]
 
-    cfg = sec.get_secret(TOGGL_API_SECRET_ARN)
-    api_token = cfg.get("api_token")
+    api_token = _toggl_section().get("api_token")
     if not api_token:
-        log.warning("Toggl API secret missing api_token; can't resolve project")
+        log.warning("Toggl API token missing from credentials; can't resolve project")
         return None, None
 
     auth = base64.b64encode(f"{api_token}:api_token".encode()).decode("ascii")

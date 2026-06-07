@@ -27,5 +27,5 @@ region = "eu-central-1"
 
 # Placeholders — replace the bracketed values OR delete this line and let
 # `sam deploy --guided` populate it interactively the first time.
-parameter_overrides = "ThingName=\"M5StackCore2\" CalendarId=\"<calendar-id>@group.calendar.google.com\" GcalAuthSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/gcal/service-account-XXXXXX\" TogglApiSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/toggl/api-XXXXXX\" TogglWebhookSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/toggl/webhook-signature-XXXXXX\" LogRetentionDays=\"14\""
+parameter_overrides = "ThingName=\"M5StackCore2\" CalendarId=\"<calendar-id>@group.calendar.google.com\" CredentialsSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/credentials-XXXXXX\" LogRetentionDays=\"14\""
 image_repositories = []

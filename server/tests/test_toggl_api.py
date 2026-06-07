@@ -19,10 +19,12 @@ def _config(monkeypatch):
     monkeypatch.setattr(
         toggl_api.sec, "get_secret",
         lambda _: {
-            "api_token": "tok",
-            "workspace_id": 11,
-            "project_id": 22,
-            "default_description": "Focus",
+            "toggl": {
+                "api_token": "tok",
+                "workspace_id": 11,
+                "project_id": 22,
+                "default_description": "Focus",
+            },
         },
     )
 

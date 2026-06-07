@@ -20,21 +20,25 @@ Parameters:
     Type: String
     Description: Google Calendar ID to write events into.
 
-  GcalAuthSecretArn:
-    Type: String
-    Description: Secrets Manager ARN holding the GCP service-account JSON.
-
-  TogglApiSecretArn:
+  CredentialsSecretArn:
     Type: String
     Description: >
-      Secrets Manager ARN holding Toggl API config:
-      {api_token, workspace_id, project_id?, default_description?}.
-
-  TogglWebhookSecretArn:
-    Type: String
-    Description: >
-      Secrets Manager ARN holding the Toggl webhook signing secret:
-      {signing_secret}.
+      Single Secrets Manager ARN holding every credential this stack
+      needs. JSON shape:
+        {
+          "gcal_service_account": { ...full GCP service-account JSON... },
+          "toggl": {
+            "api_token": "...",
+            "workspace_id": 1234567,
+            "project_id": 7654321,            # optional default project
+            "default_description": "Focus",   # optional default label
+            "webhook_signing_secret": "..."   # for HMAC-SHA256 on Toggl webhooks
+          }
+        }
+      One secret instead of three keeps the AWS Secrets Manager bill at
+      $0.40/mo instead of $1.20/mo; the per-Lambda IAM scoping cost is
+      that every Lambda can now read every key, which is fine for a
+      single-developer single-device deployment.
 
   LogRetentionDays:
     Type: Number
@@ -169,10 +173,7 @@ Resources:
       Environment:
         Variables:
           TARGET_THING_NAME: !Ref ThingName
-          WEBHOOK_SECRET_ARN: !Ref TogglWebhookSecretArn
-          # Optional: lets the webhook resolve project names so downstream
-          # consumers can render "Project X" on the device LCD.
-          TOGGL_API_SECRET_ARN: !Ref TogglApiSecretArn
+          CREDENTIALS_SECRET_ARN: !Ref CredentialsSecretArn
       Events:
         TogglWebhook:
           Type: Api
@@ -188,9 +189,7 @@ Resources:
               Resource: !GetAtt EventBus.Arn
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource:
-                - !Ref TogglWebhookSecretArn
-                - !Ref TogglApiSecretArn
+              Resource: !Ref CredentialsSecretArn
 
   TogglWebhookLogGroup:
     Type: AWS::Logs::LogGroup
@@ -216,13 +215,13 @@ Resources:
       Layers: [!Ref SharedLayer]
       Environment:
         Variables:
-          TOGGL_SECRET_ARN: !Ref TogglApiSecretArn
+          CREDENTIALS_SECRET_ARN: !Ref CredentialsSecretArn
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Ref TogglApiSecretArn
+              Resource: !Ref CredentialsSecretArn
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
               Resource: !GetAtt StateTable.Arn
@@ -280,14 +279,14 @@ Resources:
       MemorySize: 512                # google-api-python-client is hungry
       Environment:
         Variables:
-          GCAL_SECRET_ARN: !Ref GcalAuthSecretArn
+          CREDENTIALS_SECRET_ARN: !Ref CredentialsSecretArn
           CALENDAR_ID: !Ref CalendarId
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Ref GcalAuthSecretArn
+              Resource: !Ref CredentialsSecretArn
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem]
               Resource: !GetAtt StateTable.Arn
@@ -412,14 +411,14 @@ Resources:
       Timeout: 30
       Environment:
         Variables:
-          TOGGL_SECRET_ARN: !Ref TogglApiSecretArn
+          CREDENTIALS_SECRET_ARN: !Ref CredentialsSecretArn
           TINY_REMAINDER_S: !Ref TinyRemainderS
       Policies:
         - Version: '2012-10-17'
           Statement:
             - Effect: Allow
               Action: secretsmanager:GetSecretValue
-              Resource: !Ref TogglApiSecretArn
+              Resource: !Ref CredentialsSecretArn
             - Effect: Allow
               Action: [dynamodb:GetItem, dynamodb:PutItem]
               Resource: !GetAtt StateTable.Arn

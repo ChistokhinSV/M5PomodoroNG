@@ -20,7 +20,7 @@ THING = "M5StackCore2"
 def _patch_secrets(monkeypatch):
     monkeypatch.setattr(
         wake_resync.sec, "get_secret",
-        lambda _: {"api_token": "tok", "workspace_id": 99},
+        lambda _: {"toggl": {"api_token": "tok", "workspace_id": 99}},
     )
 
 

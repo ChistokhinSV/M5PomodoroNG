@@ -34,7 +34,13 @@ def _signed(body: dict) -> dict:
 def _patch_secrets(monkeypatch):
     monkeypatch.setattr(
         toggl_webhook.sec, "get_secret",
-        lambda _: {"signing_secret": SIGNING_SECRET},
+        lambda _: {
+            "toggl": {
+                "api_token": "tok",
+                "workspace_id": 99,
+                "webhook_signing_secret": SIGNING_SECRET,
+            },
+        },
     )
 
 

@@ -21,11 +21,11 @@ from shared import toggl_client
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-TOGGL_SECRET_ARN = os.environ["TOGGL_SECRET_ARN"]
+CREDENTIALS_SECRET_ARN = os.environ["CREDENTIALS_SECRET_ARN"]
 
 
 def _config() -> tuple[str, int, int | None, str | None]:
-    cfg = sec.get_secret(TOGGL_SECRET_ARN)
+    cfg = sec.get_secret(CREDENTIALS_SECRET_ARN).get("toggl") or {}
     return (
         cfg["api_token"],
         int(cfg["workspace_id"]),

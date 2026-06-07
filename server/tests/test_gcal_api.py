@@ -55,7 +55,11 @@ def fake_gcal(monkeypatch):
 def _patch_secrets(monkeypatch):
     monkeypatch.setattr(
         gcal_api.sec, "get_secret",
-        lambda _: {"client_email": "svc@proj.iam.gserviceaccount.com"},
+        lambda _: {
+            "gcal_service_account": {
+                "client_email": "svc@proj.iam.gserviceaccount.com",
+            },
+        },
     )
 
 

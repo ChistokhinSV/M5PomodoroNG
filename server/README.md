@@ -22,7 +22,7 @@ CONSUMERS (subscribe to filtered slices)
 
 STATE
   DynamoDB m5pomodoro-state    (per-device runtime + idempotency markers)
-  Secrets Manager              (Toggl token, GCal SA JSON, webhook secret)
+  Secrets Manager              (one combined credentials secret)
 ```
 
 EventBridge rules do the routing — adding a new consumer is a CloudFormation
@@ -73,28 +73,36 @@ and the firmware-generated `event_id` derived from those.
 
 ### 3. Secrets Manager
 
-Run each line, substituting your values:
+Everything goes into one secret. The shape:
 
-```bash
-aws secretsmanager create-secret --name m5pomodoro/toggl/api \
-  --description "Toggl Track API config for m5pomodoro" \
-  --secret-string '{
-    "api_token":   "YOUR_TOGGL_API_TOKEN",
-    "workspace_id": 12345678,
-    "project_id":   87654321,
-    "default_description": "Pomodoro work"
-  }'
-
-aws secretsmanager create-secret --name m5pomodoro/toggl/webhook-signature \
-  --description "Toggl webhook signing secret" \
-  --secret-string '{"signing_secret":"WEBHOOK_SECRET_FROM_TOGGL"}'
-
-aws secretsmanager create-secret --name m5pomodoro/gcal/service-account \
-  --description "GCP service account JSON for m5pomodoro" \
-  --secret-string file://path/to/service-account-key.json
+```json
+{
+  "gcal_service_account": { ...the entire GCP service-account JSON... },
+  "toggl": {
+    "api_token":             "YOUR_TOGGL_API_TOKEN",
+    "workspace_id":          12345678,
+    "project_id":            87654321,
+    "default_description":   "Pomodoro work",
+    "webhook_signing_secret":"WEBHOOK_SECRET_FROM_TOGGL"
+  }
+}
 ```
 
-Note the three ARNs printed — they're parameters to `sam deploy`.
+Build the JSON locally first (so the SA key stays on one line), then:
+
+```bash
+aws secretsmanager create-secret --name m5pomodoro/credentials \
+  --description "All credentials for the m5pomodoro server" \
+  --secret-string file://credentials.json
+```
+
+Why one secret instead of three? AWS bills $0.40 per secret per month — one
+combined secret is $0.40/mo instead of $1.20/mo. The trade-off is that every
+Lambda role can now read every key. On a single-user single-device setup
+that's an acceptable IAM-scoping loss.
+
+Note the ARN printed — it's the `CredentialsSecretArn` parameter for
+`sam deploy`.
 
 ## Deploy
 
@@ -106,16 +114,16 @@ sam deploy --guided
 
 You'll be asked for:
 
-| Parameter              | Value                                                   |
-|------------------------|---------------------------------------------------------|
-| `ThingName`            | `M5StackCore2`                                          |
-| `CalendarId`           | Your calendar ID from setup step 2.4                    |
-| `GcalAuthSecretArn`    | Output ARN of `m5pomodoro/gcal/service-account`         |
-| `TogglApiSecretArn`    | Output ARN of `m5pomodoro/toggl/api`                    |
-| `TogglWebhookSecretArn`| Output ARN of `m5pomodoro/toggl/webhook-signature`      |
+| Parameter             | Value                                                   |
+|-----------------------|---------------------------------------------------------|
+| `ThingName`           | `M5StackCore2`                                          |
+| `CalendarId`          | Your calendar ID from setup step 2.4                    |
+| `CredentialsSecretArn`| Output ARN of `m5pomodoro/credentials`                  |
 
 Save the answers to `samconfig.toml` when prompted so subsequent
-`sam deploy` runs are silent.
+`sam deploy` runs are silent. `samconfig.toml` is gitignored — see
+`samconfig.toml.example` for the shape to copy if you want to fill it
+in by hand.
 
 Once deploy finishes, look at the **Outputs** section for the
 `TogglWebhookUrl` — copy that URL back into Toggl's webhook config (step

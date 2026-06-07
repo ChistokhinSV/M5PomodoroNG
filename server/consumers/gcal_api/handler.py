@@ -32,12 +32,12 @@ import gcal_client
 log = logging.getLogger()
 log.setLevel(logging.INFO)
 
-GCAL_SECRET_ARN = os.environ["GCAL_SECRET_ARN"]
-CALENDAR_ID     = os.environ["CALENDAR_ID"]
+CREDENTIALS_SECRET_ARN = os.environ["CREDENTIALS_SECRET_ARN"]
+CALENDAR_ID            = os.environ["CALENDAR_ID"]
 
 
 def _service_account_info() -> dict:
-    return sec.get_secret(GCAL_SECRET_ARN)
+    return sec.get_secret(CREDENTIALS_SECRET_ARN)["gcal_service_account"]
 
 
 def _iso(ts: int) -> str:

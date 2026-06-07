@@ -44,7 +44,7 @@ log = logging.getLogger()
 log.setLevel(logging.INFO)
 
 REGION = os.environ.get("AWS_REGION", "eu-central-1")
-TOGGL_SECRET_ARN = os.environ["TOGGL_SECRET_ARN"]
+CREDENTIALS_SECRET_ARN = os.environ["CREDENTIALS_SECRET_ARN"]
 # Below this many seconds remaining, we don't trust the math (the device
 # would tick straight into a TIMEOUT). Skip and let the user have a full
 # fresh interval. Configurable via the SAM TinyRemainderS parameter.
@@ -54,7 +54,7 @@ _iot_data = boto3.client("iot-data", region_name=REGION)
 
 
 def _toggl_config() -> tuple[str, int]:
-    cfg = sec.get_secret(TOGGL_SECRET_ARN)
+    cfg = sec.get_secret(CREDENTIALS_SECRET_ARN).get("toggl") or {}
     return cfg["api_token"], int(cfg["workspace_id"])
 
 
