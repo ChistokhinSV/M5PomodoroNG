@@ -403,26 +403,37 @@ void MainScreen::drawTaskName(Renderer& renderer) {
     bool progress_visible = (state == TimerStateMachine::State::ACTIVE ||
                             state == TimerStateMachine::State::PAUSED);
 
-    int16_t y;
-    int16_t controls_bottom;
-    int16_t available_space;
-
-    // timer bottom
-    controls_bottom = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT + SEQUENCE_HEIGHT + TIMER_HEIGHT + TIMER_GAP;
-
-    // progress bar bottom if visible
+    int16_t controls_bottom = STATUS_BAR_HEIGHT + MODE_LABEL_HEIGHT
+                              + SEQUENCE_HEIGHT + TIMER_HEIGHT + TIMER_GAP;
     if (progress_visible) {
         controls_bottom += PROGRESS_HEIGHT + TIMER_GAP;
     }
+    int16_t available_space = SCREEN_HEIGHT - controls_bottom - STATUS_BAR_HEIGHT;
 
-    // Calculate available space
-    available_space = SCREEN_HEIGHT - controls_bottom - STATUS_BAR_HEIGHT;
+    auto cur_session = sequence_.getCurrentSession();
+    bool is_break =
+        (cur_session.type == PomodoroSequence::SessionType::SHORT_BREAK ||
+         cur_session.type == PomodoroSequence::SessionType::LONG_BREAK);
 
-    y = controls_bottom + (available_space / 2);
+    renderer.setTextDatum(MC_DATUM);
 
-    renderer.setTextDatum(MC_DATUM);  // Middle-center for better vertical centering
-    renderer.drawString(SCREEN_WIDTH / 2, y, task_name_,
-                       &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
+    if (is_break) {
+        // Two-line layout during a break: project name on top, "REST" tag
+        // below in cyan so the user can see at a glance that the timer is
+        // counting *down* a break, not a focus session. Available space is
+        // roughly 40px when the progress bar is up, comfortably enough for
+        // two Font2 lines (~16px each).
+        int16_t y_top = controls_bottom + available_space / 3;
+        int16_t y_bot = controls_bottom + (2 * available_space) / 3;
+        renderer.drawString(SCREEN_WIDTH / 2, y_top, task_name_,
+                           &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
+        renderer.drawString(SCREEN_WIDTH / 2, y_bot, "REST",
+                           &fonts::Font2, Renderer::Color(TFT_CYAN));
+    } else {
+        int16_t y = controls_bottom + (available_space / 2);
+        renderer.drawString(SCREEN_WIDTH / 2, y, task_name_,
+                           &fonts::Font2, Renderer::Color(TFT_LIGHTGRAY));
+    }
 }
 
 void MainScreen::updateButtons() {
