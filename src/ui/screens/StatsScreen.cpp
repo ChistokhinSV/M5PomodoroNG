@@ -21,14 +21,15 @@ StatsScreen::StatsScreen(Statistics& statistics, NavigationCallback navigate_cal
     int16_t chart_y = STATUS_BAR_HEIGHT + TITLE_HEIGHT + SUMMARY_HEIGHT + CHART_TITLE_HEIGHT;
     stats_chart_.setBounds(20, chart_y, 280, CHART_HEIGHT);
 
-    // Load weekly data into chart
+    // Load weekly data into chart. getLast7Days returns newest-first
+    // (last7[0]=today, last7[6]=six days ago); the chart wants oldest-first
+    // (data[0]=six days ago, data[6]=today) so today renders on the right.
     Statistics::DayStats last7[7];
     statistics_.getLast7Days(last7);
 
-    // Convert to simple counts for chart (last 7 days, 0 = oldest, 6 = today)
     uint8_t weekly_data[7];
     for (uint8_t i = 0; i < 7; i++) {
-        weekly_data[i] = last7[i].completed_sessions;
+        weekly_data[i] = last7[6 - i].completed_sessions;
     }
 
     stats_chart_.setData(weekly_data);
@@ -53,7 +54,7 @@ void StatsScreen::update(uint32_t deltaMs) {
 
     uint8_t weekly_data[7];
     for (uint8_t i = 0; i < 7; i++) {
-        weekly_data[i] = last7[i].completed_sessions;
+        weekly_data[i] = last7[6 - i].completed_sessions;
     }
     stats_chart_.setData(weekly_data);
 
