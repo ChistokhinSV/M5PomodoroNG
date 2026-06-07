@@ -47,3 +47,6 @@ temp/
 NUL
 nul
 sdcard/config/network.ini
+
+# Local serial captures (pio device monitor)
+.serial-sessions/
