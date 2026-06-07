@@ -1,8 +1,15 @@
 #include "Statistics.h"
 #include "SyncPrimitives.h"
+#include "TimeManager.h"
 #include "../utils/MutexGuard.h"
 #include <Arduino.h>
 #include <sys/time.h>
+
+// Day bucketing is driven by the global TimeManager when it's available.
+// Until then (very early boot, before main.cpp wires it up) we fall back to
+// the system clock, which is OK because Statistics::begin() runs late enough
+// that the pointer is already set in normal operation.
+extern TimeManager* g_timeManager;
 
 Statistics::Statistics()
     : initialized(false), cache_valid(false) {
@@ -274,13 +281,23 @@ void Statistics::clear() {
 // Private methods
 
 uint32_t Statistics::getTodayEpochDays() const {
-    // Get current time in seconds since Unix epoch
+    // Prefer TimeManager: it computes days from the RTC-derived UTC epoch
+    // shifted by the local TZ offset, so the day boundary lands at *local*
+    // midnight. Without this, a session at 23:55 local (UTC+3) would be
+    // counted under tomorrow's UTC day — and at boot, today_cache would
+    // load yesterday's slot when the system clock hadn't drifted into the
+    // new UTC day yet.
+    if (g_timeManager) {
+        uint32_t days = g_timeManager->getLocalEpochDays();
+        if (days != 0) return days;
+    }
+
+    // Fallback for very-early-boot reads (before main wires g_timeManager).
+    // Returns UTC days; the cache will get re-validated by ensureTodayExists
+    // on the first recordWorkSession() once TimeManager is up.
     struct timeval tv;
     gettimeofday(&tv, nullptr);
-    uint32_t epoch = tv.tv_sec;
-
-    // Convert to days since epoch
-    return epoch / 86400;
+    return static_cast<uint32_t>(tv.tv_sec / 86400);
 }
 
 uint8_t Statistics::getDayIndex(uint32_t epoch_days) const {

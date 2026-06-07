@@ -54,7 +54,12 @@ public:
 
     // Time getters (from M5.Rtc)
     uint32_t getEpoch() const;         // Current Unix timestamp from RTC
-    uint32_t getEpochDays() const;     // Days since Unix epoch
+    uint32_t getEpochDays() const;     // Days since Unix epoch (UTC midnight)
+    // Days since Unix epoch counted by the *local* calendar — i.e. the
+    // boundary is local midnight (after DST/UTC offset). This is the field
+    // Statistics uses to bucket per-day counts so a session at 23:55 local
+    // doesn't land in tomorrow's slot just because UTC has already rolled.
+    uint32_t getLocalEpochDays() const;
     void getLocalTime(struct tm& timeinfo) const;
 
     // Time source status

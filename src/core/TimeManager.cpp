@@ -179,6 +179,20 @@ uint32_t TimeManager::getEpochDays() const {
     return epoch / 86400;
 }
 
+uint32_t TimeManager::getLocalEpochDays() const {
+    uint32_t epoch = getEpoch();
+    if (epoch == 0) return 0;
+
+    // Shift by the TZ offset so the divide rolls at *local* midnight, not
+    // UTC midnight. utc_offset_sec is computed once in begin() (east-positive,
+    // DST-aware as of the boot moment). Acceptable approximation — DST cuts in
+    // at 02:00/03:00 local and the rolling-day index doesn't care about an
+    // hour of drift on the changeover day.
+    int64_t shifted = static_cast<int64_t>(epoch) + utc_offset_sec;
+    if (shifted < 0) shifted = 0;
+    return static_cast<uint32_t>(shifted / 86400);
+}
+
 void TimeManager::getLocalTime(struct tm& timeinfo) const {
     uint32_t epoch = getEpoch();
     time_t raw_time = epoch;
