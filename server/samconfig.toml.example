@@ -1,0 +1,31 @@
+version = 0.1
+
+# Template for your local samconfig.toml.
+#
+# Copy this to samconfig.toml (which is gitignored) and either:
+#   1. Run `sam deploy --guided` and let it fill in the parameter_overrides
+#      for you on the first deploy, OR
+#   2. Edit the placeholders below by hand.
+#
+# Real ARNs / account ids must never land in version control.
+
+[default]
+[default.global.parameters]
+stack_name = "m5pomodoro-server"
+
+[default.build.parameters]
+cached = true
+parallel = true
+use_container = false  # set to true if you don't have Python 3.11 locally
+
+[default.deploy.parameters]
+capabilities = "CAPABILITY_IAM"
+confirm_changeset = true
+resolve_s3 = true
+s3_prefix = "m5pomodoro-server"
+region = "eu-central-1"
+
+# Placeholders — replace the bracketed values OR delete this line and let
+# `sam deploy --guided` populate it interactively the first time.
+parameter_overrides = "ThingName=\"M5StackCore2\" CalendarId=\"<calendar-id>@group.calendar.google.com\" GcalAuthSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/gcal/service-account-XXXXXX\" TogglApiSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/toggl/api-XXXXXX\" TogglWebhookSecretArn=\"arn:aws:secretsmanager:eu-central-1:<account-id>:secret:m5pomodoro/toggl/webhook-signature-XXXXXX\" LogRetentionDays=\"14\""
+image_repositories = []

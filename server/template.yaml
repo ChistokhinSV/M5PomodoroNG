@@ -1,0 +1,531 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  m5-pomodoro server: EventBridge-based bus with sources (shadow-relay,
+  toggl-webhook) and consumers (toggl-api, gcal-api, device-shadow).
+
+# ---------------------------------------------------------------------------
+# Parameters — everything environment-specific is here. samconfig.toml has
+# default values for the typical deploy; --parameter-overrides on the CLI
+# wins.
+# ---------------------------------------------------------------------------
+Parameters:
+
+  ThingName:
+    Type: String
+    Default: M5StackCore2
+    Description: AWS IoT Thing name this stack syncs with.
+
+  CalendarId:
+    Type: String
+    Description: Google Calendar ID to write events into.
+
+  GcalAuthSecretArn:
+    Type: String
+    Description: Secrets Manager ARN holding the GCP service-account JSON.
+
+  TogglApiSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager ARN holding Toggl API config:
+      {api_token, workspace_id, project_id?, default_description?}.
+
+  TogglWebhookSecretArn:
+    Type: String
+    Description: >
+      Secrets Manager ARN holding the Toggl webhook signing secret:
+      {signing_secret}.
+
+  LogRetentionDays:
+    Type: Number
+    Default: 14
+    Description: CloudWatch log group retention for every Lambda.
+
+  TinyRemainderS:
+    Type: Number
+    Default: 30
+    Description: >
+      Wake-resync threshold (seconds). If the computed remaining work-interval
+      time is below this, the wake consumer skips it and gives the device a
+      full fresh interval instead (a 2-second timer would tick into TIMEOUT
+      before the LCD finished drawing). Bump higher if you wake the device
+      a lot and want to bail out of nearly-finished intervals more often.
+
+# ---------------------------------------------------------------------------
+# Globals — applied to every Serverless::Function unless overridden.
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.11
+    Architectures: [x86_64]
+    Timeout: 15
+    MemorySize: 256
+    Environment:
+      Variables:
+        EVENT_BUS_NAME: !Ref EventBus
+        STATE_TABLE_NAME: !Ref StateTable
+
+Resources:
+
+  # =========================================================================
+  # Bus + state
+  # =========================================================================
+
+  EventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: m5pomodoro-events
+
+  StateTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: m5pomodoro-state
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - {AttributeName: PK, AttributeType: S}
+        - {AttributeName: SK, AttributeType: S}
+      KeySchema:
+        - {AttributeName: PK, KeyType: HASH}
+        - {AttributeName: SK, KeyType: RANGE}
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  SharedLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: m5pomodoro-shared
+      # ContentUri points at a directory that already has the Python-layer
+      # convention layout (python/shared/*.py). SAM zips it as-is — no
+      # BuildMethod needed, which means no `make` dependency on Windows and
+      # no pip install step (the layer is pure stdlib + boto3 from runtime).
+      ContentUri: ./shared
+      Description: Shared modules (events, secrets, state_store, shadow_parser)
+      CompatibleRuntimes: [python3.11]
+      RetentionPolicy: Retain
+
+  # =========================================================================
+  # Source: shadow-relay  (IoT Rule -> Lambda -> bus)
+  # =========================================================================
+
+  ShadowRelayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./sources/shadow_relay
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
+
+  ShadowRelayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ShadowRelayFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  ShadowFanoutRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: m5pomodoro_shadow_fanout
+      TopicRulePayload:
+        AwsIotSqlVersion: 2016-03-23
+        Sql: !Sub >
+          SELECT *, topic(3) AS thing_name
+          FROM '$aws/things/+/shadow/update/documents'
+        RuleDisabled: false
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt ShadowRelayFunction.Arn
+
+  ShadowRelayInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt ShadowRelayFunction.Arn
+      Principal: iot.amazonaws.com
+      SourceArn: !GetAtt ShadowFanoutRule.Arn
+
+  # =========================================================================
+  # Source: toggl-webhook  (API Gateway -> Lambda -> bus)
+  # =========================================================================
+
+  TogglWebhookApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      StageName: live
+      EndpointConfiguration:
+        Type: REGIONAL
+
+  TogglWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./sources/toggl_webhook
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Environment:
+        Variables:
+          TARGET_THING_NAME: !Ref ThingName
+          WEBHOOK_SECRET_ARN: !Ref TogglWebhookSecretArn
+          # Optional: lets the webhook resolve project names so downstream
+          # consumers can render "Project X" on the device LCD.
+          TOGGL_API_SECRET_ARN: !Ref TogglApiSecretArn
+      Events:
+        TogglWebhook:
+          Type: Api
+          Properties:
+            RestApiId: !Ref TogglWebhookApi
+            Path: /webhooks/toggl
+            Method: post
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: events:PutEvents
+              Resource: !GetAtt EventBus.Arn
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource:
+                - !Ref TogglWebhookSecretArn
+                - !Ref TogglApiSecretArn
+
+  TogglWebhookLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${TogglWebhookFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  # =========================================================================
+  # Consumer: toggl-api  (bus rule -> Lambda -> Toggl HTTP)
+  # =========================================================================
+
+  TogglApiDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: m5pomodoro-toggl-api-dlq
+      MessageRetentionPeriod: 1209600   # 14 days
+
+  TogglApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumers/toggl_api
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Environment:
+        Variables:
+          TOGGL_SECRET_ARN: !Ref TogglApiSecretArn
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref TogglApiSecretArn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem, dynamodb:DeleteItem]
+              Resource: !GetAtt StateTable.Arn
+
+  TogglApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${TogglApiFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  TogglApiRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source: [m5pomodoro.shadow]
+        detail-type:
+          - prefix: device.session.
+        detail:
+          thing_name: [!Ref ThingName]
+      Targets:
+        - Id: TogglApi
+          Arn: !GetAtt TogglApiFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt TogglApiDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+  TogglApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt TogglApiFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TogglApiRule.Arn
+
+  # =========================================================================
+  # Consumer: gcal-api  (bus rule -> Lambda -> Google Calendar API)
+  # =========================================================================
+
+  GcalApiDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: m5pomodoro-gcal-api-dlq
+      MessageRetentionPeriod: 1209600
+
+  GcalApiFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumers/gcal_api
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Timeout: 30                    # GCal cold start is slower
+      MemorySize: 512                # google-api-python-client is hungry
+      Environment:
+        Variables:
+          GCAL_SECRET_ARN: !Ref GcalAuthSecretArn
+          CALENDAR_ID: !Ref CalendarId
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref GcalAuthSecretArn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt StateTable.Arn
+
+  GcalApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${GcalApiFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  GcalApiRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source: [m5pomodoro.shadow]
+        detail-type:
+          - device.session.work.completed
+          - device.session.cycle.completed
+        detail:
+          thing_name: [!Ref ThingName]
+      Targets:
+        - Id: GcalApi
+          Arn: !GetAtt GcalApiFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt GcalApiDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+  GcalApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt GcalApiFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt GcalApiRule.Arn
+
+  # =========================================================================
+  # Consumer: task-context  (bus rule -> Lambda -> DDB + IoT shadow desired
+  # write of task_name)
+  #
+  # Provider-agnostic: matches every external.<provider>.timer.started so a
+  # future Clockify/Harvest/etc. source can plug in without touching this
+  # consumer's wiring.
+  # =========================================================================
+
+  TaskContextDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: m5pomodoro-task-context-dlq
+      MessageRetentionPeriod: 1209600
+
+  TaskContextFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumers/task_context
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt StateTable.Arn
+            - Effect: Allow
+              Action: iot:UpdateThingShadow
+              Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:thing/${ThingName}
+
+  TaskContextLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${TaskContextFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  TaskContextRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern:
+        # Any provider's timer-start webhook (external.<svc>.timer.started)
+        # contributes to the task context. The detail-type suffix gate keeps
+        # us from acting on stop events that don't change the context.
+        detail-type:
+          - suffix: .timer.started
+        detail:
+          thing_name: [!Ref ThingName]
+      Targets:
+        - Id: TaskContext
+          Arn: !GetAtt TaskContextFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt TaskContextDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+  TaskContextInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt TaskContextFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt TaskContextRule.Arn
+
+  # =========================================================================
+  # Consumer: wake-resync  (device.wake -> Lambda -> shadow desired start
+  # with remaining_sec_override from Toggl current-entry math)
+  # =========================================================================
+
+  WakeResyncDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: m5pomodoro-wake-resync-dlq
+      MessageRetentionPeriod: 1209600
+
+  WakeResyncFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumers/wake_resync
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Timeout: 30
+      Environment:
+        Variables:
+          TOGGL_SECRET_ARN: !Ref TogglApiSecretArn
+          TINY_REMAINDER_S: !Ref TinyRemainderS
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: secretsmanager:GetSecretValue
+              Resource: !Ref TogglApiSecretArn
+            - Effect: Allow
+              Action: [dynamodb:GetItem, dynamodb:PutItem]
+              Resource: !GetAtt StateTable.Arn
+            - Effect: Allow
+              Action: [iot:GetThingShadow, iot:UpdateThingShadow]
+              Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:thing/${ThingName}
+
+  WakeResyncLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${WakeResyncFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  WakeResyncRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source: [m5pomodoro.shadow]
+        detail-type:
+          - device.wake
+        detail:
+          thing_name: [!Ref ThingName]
+      Targets:
+        - Id: WakeResync
+          Arn: !GetAtt WakeResyncFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt WakeResyncDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+  WakeResyncInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt WakeResyncFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WakeResyncRule.Arn
+
+  # =========================================================================
+  # Consumer: device-shadow  (bus rule -> Lambda -> IoT shadow desired write)
+  # =========================================================================
+
+  DeviceShadowDlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: m5pomodoro-device-shadow-dlq
+      MessageRetentionPeriod: 1209600
+
+  DeviceShadowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./consumers/device_shadow
+      Handler: handler.handler
+      Layers: [!Ref SharedLayer]
+      Policies:
+        - Version: '2012-10-17'
+          Statement:
+            - Effect: Allow
+              Action: [iot:GetThingShadow, iot:UpdateThingShadow]
+              Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:thing/${ThingName}
+
+  DeviceShadowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${DeviceShadowFunction}
+      RetentionInDays: !Ref LogRetentionDays
+
+  DeviceShadowRule:
+    Type: AWS::Events::Rule
+    Properties:
+      EventBusName: !Ref EventBus
+      EventPattern:
+        source: [m5pomodoro.webhook.toggl]
+        detail-type:
+          - prefix: external.toggl.
+        detail:
+          thing_name: [!Ref ThingName]
+      Targets:
+        - Id: DeviceShadow
+          Arn: !GetAtt DeviceShadowFunction.Arn
+          DeadLetterConfig:
+            Arn: !GetAtt DeviceShadowDlq.Arn
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+  DeviceShadowInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt DeviceShadowFunction.Arn
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DeviceShadowRule.Arn
+
+Outputs:
+
+  TogglWebhookUrl:
+    Description: Public webhook URL to paste into Toggl Track's webhook config.
+    Value: !Sub https://${TogglWebhookApi}.execute-api.${AWS::Region}.amazonaws.com/live/webhooks/toggl
+
+  EventBusName:
+    Description: EventBridge custom bus name.
+    Value: !Ref EventBus
+
+  StateTableName:
+    Description: DynamoDB state table.
+    Value: !Ref StateTable

@@ -1,0 +1,3 @@
+# shared/ layer brings pydantic + boto3 (boto3 is in the Lambda runtime by
+# default but we keep it in the layer so versions are pinned in tests).
+# This handler has no extras of its own.

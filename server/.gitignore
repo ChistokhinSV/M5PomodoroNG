@@ -3,6 +3,11 @@
 # we want in version control.
 .aws-sam/
 
+# Real deploy config — your AWS account id, calendar id, and Secrets
+# Manager ARNs live here. Copy samconfig.toml.example to samconfig.toml
+# (or run `sam deploy --guided`) and keep your local copy out of git.
+samconfig.toml
+
 # Python bytecode caches that pytest / py_compile leave behind.
 __pycache__/
 *.pyc

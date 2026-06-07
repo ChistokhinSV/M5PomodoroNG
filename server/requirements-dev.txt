@@ -1,0 +1,6 @@
+pytest==8.3.3
+boto3==1.35.30
+requests==2.32.3
+google-api-python-client==2.149.0
+google-auth==2.35.0
+

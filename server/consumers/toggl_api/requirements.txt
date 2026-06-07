@@ -1,0 +1,2 @@
+# Toggl HTTP client lives in the shared layer (stdlib urllib).
+# This consumer has no extra deps.
