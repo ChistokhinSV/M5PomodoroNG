@@ -106,9 +106,15 @@ private:
 
     // NVS persistence backing — opened by begin(), written by save() after any
     // state mutation. Namespace short enough to fit NVS 15-char key limit.
+    // last_date is the local-calendar epoch-days stamp at every save; begin()
+    // compares it to today's and resets the breadcrumb if they differ, so an
+    // overnight light-sleep doesn't resume on yesterday's break interval.
     Preferences nvs_prefs_;
     bool nvs_ready_ = false;
+    static constexpr const char* KEY_STATE     = "state";
+    static constexpr const char* KEY_LAST_DATE = "last_date";
     void save();
+    uint32_t currentLocalDays() const;   // 0 = TimeManager not ready
 };
 
 #endif // POMODORO_SEQUENCE_H

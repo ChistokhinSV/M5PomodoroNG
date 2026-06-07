@@ -1,5 +1,12 @@
 #include "PomodoroSequence.h"
+#include "TimeManager.h"
 #include <Arduino.h>
+
+// Local-calendar date for the breadcrumb staleness check. Falls back to 0
+// (= unknown) before TimeManager has been wired up — main.cpp calls
+// TimeManager::begin() well before PomodoroSequence::begin() in normal boot,
+// so this is essentially always non-zero in production.
+extern TimeManager* g_timeManager;
 
 PomodoroSequence::PomodoroSequence()
     : current_session(1),
@@ -20,9 +27,12 @@ bool PomodoroSequence::begin() {
     }
     nvs_ready_ = true;
 
-    uint32_t saved = nvs_prefs_.getULong("state", 0);
+    uint32_t saved = nvs_prefs_.getULong(KEY_STATE, 0);
     if (saved == 0) {
         Serial.println("[PomodoroSequence] No saved state, starting at session 1");
+        // Stamp today's date so a same-day reboot doesn't re-trigger the
+        // new-day path below.
+        save();
         return true;
     }
 
@@ -30,6 +40,24 @@ bool PomodoroSequence::begin() {
     // and silently resets current_session to 1 if it's out of range — handles
     // the case where the user changed mode (Classic→Study) since last save.
     deserialize(saved);
+
+    // New-day check: if the device idled-into-sleep on a break interval and
+    // the user comes back next day, the breadcrumb would otherwise put them
+    // on the break (green LED + "REST" label) when an external start lands.
+    // Reset to a fresh cycle so the first START runs a work session.
+    uint32_t today    = currentLocalDays();
+    uint32_t last_day = nvs_prefs_.getUInt(KEY_LAST_DATE, 0);
+    if (today != 0 && last_day != 0 && today != last_day) {
+        Serial.printf("[PomodoroSequence] New day (last=%lu, today=%lu); "
+                      "resetting breadcrumb (was session=%u, completed_today=%u)\n",
+                      (unsigned long)last_day, (unsigned long)today,
+                      current_session, completed_today);
+        current_session = 1;
+        completed_today = 0;
+        save();
+        return true;
+    }
+
     Serial.printf("[PomodoroSequence] Restored from NVS: session=%d, completed_today=%d\n",
                   current_session, completed_today);
     return true;
@@ -37,7 +65,16 @@ bool PomodoroSequence::begin() {
 
 void PomodoroSequence::save() {
     if (!nvs_ready_) return;
-    nvs_prefs_.putULong("state", serialize());
+    nvs_prefs_.putULong(KEY_STATE, serialize());
+    uint32_t today = currentLocalDays();
+    if (today != 0) {
+        nvs_prefs_.putUInt(KEY_LAST_DATE, today);
+    }
+}
+
+uint32_t PomodoroSequence::currentLocalDays() const {
+    if (!g_timeManager) return 0;
+    return g_timeManager->getLocalEpochDays();
 }
 
 void PomodoroSequence::setWorkDuration(uint16_t minutes) {
