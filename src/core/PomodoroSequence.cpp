@@ -54,10 +54,29 @@ void PomodoroSequence::setLongBreakDuration(uint16_t minutes) {
 
 void PomodoroSequence::setSessionsBeforeLong(uint8_t count) {
     custom_sessions_before_long = constrain(count, 2, 8);  // Reasonable limits
+    clampCurrentSessionToCycle();
 }
 
 void PomodoroSequence::setNumCycles(uint8_t cycles) {
     custom_num_cycles = constrain(cycles, 1, 4);  // Reasonable limits (1-4 cycles)
+    clampCurrentSessionToCycle();
+}
+
+void PomodoroSequence::clampCurrentSessionToCycle() {
+    // Shrinking the cycle (e.g. 4 sessions → 2) leaves current_session
+    // dangling past the new total. getCurrentWorkSession() walks 1..N and
+    // counts every odd interval as a work session, so a stale current=5
+    // with new total=4 shows up as "3/2" on the LCD. Reset to the start of
+    // a fresh cycle when the structure no longer accommodates where we are.
+    // Growing the cycle keeps progress intact (still in range).
+    uint8_t total = getTotalIntervals();
+    if (current_session < 1 || current_session > total) {
+        Serial.printf("[PomodoroSequence] Cycle structure changed, "
+                      "resetting session %u -> 1 (new total=%u)\n",
+                      current_session, total);
+        current_session = 1;
+        save();
+    }
 }
 
 void PomodoroSequence::start() {

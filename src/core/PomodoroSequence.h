@@ -98,6 +98,12 @@ private:
     SessionType getSessionType(uint8_t session_num) const;
     uint16_t getSessionDuration(SessionType type) const;
 
+    // Called after a settings change that affects getTotalIntervals().
+    // If current_session has fallen outside the new total it gets reset to 1
+    // so getCurrentWorkSession() can't keep counting work intervals past the
+    // new cycle length and showing a "3/2" overflow on the LCD.
+    void clampCurrentSessionToCycle();
+
     // NVS persistence backing — opened by begin(), written by save() after any
     // state mutation. Namespace short enough to fit NVS 15-char key limit.
     Preferences nvs_prefs_;
