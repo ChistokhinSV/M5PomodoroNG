@@ -9,6 +9,7 @@
 #include "../network/WebhookDispatcher.h"
 #include "../network/MQTTClient.h"
 #include "../network/ShadowPublisher.h"
+#include "../ui/ScreenManager.h"
 #include <Arduino.h>
 #include <WiFi.h>
 #include <string.h>
@@ -38,6 +39,7 @@ extern TimerStateMachine*   g_stateMachine;
 extern PomodoroSequence*    g_sequence;
 extern Statistics*          g_statistics;
 extern TimeManager*         g_timeManager;
+extern ScreenManager*       g_screenManager;
 
 TaskHandle_t g_networkTaskHandle = NULL;
 
@@ -138,6 +140,12 @@ void runPersistentLoop(WebhookDispatcher& dispatcher) {
     );
     mqtt.onMessage([&shadow](const char* topic, const char* payload, size_t len) {
         shadow.handleMqttMessage(topic, payload, len);
+    });
+    // When the server-side task-context consumer pushes a new task_name into
+    // the shadow desired state, route it into the UI. Cross-core, but the
+    // touched buffer is small — see ScreenManager::setMainScreenTaskName.
+    shadow.setTaskNameCallback([](const char* name) {
+        if (g_screenManager) g_screenManager->setMainScreenTaskName(name);
     });
     mqtt.begin();
 

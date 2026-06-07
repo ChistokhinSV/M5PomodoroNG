@@ -85,6 +85,12 @@ public:
     void updateStatus(uint8_t battery, bool charging, bool wifi,
                      const char* mode, uint8_t hour, uint8_t minute);
 
+    // Forwarded from ShadowPublisher's task_name delta callback. Updates the
+    // primary "Focus Session" / project label shown on MainScreen. Provider
+    // agnostic — the server-side task-context consumer decides what text to
+    // push, the firmware just displays it.
+    void setMainScreenTaskName(const char* name);
+
 private:
     // Screen instances (stack-allocated, always exist)
     MainScreen main_screen_;

@@ -1,12 +1,25 @@
 #include "TimerStateMachine.h"
 #include "Statistics.h"
 #include "SyncPrimitives.h"
+#include "TimeManager.h"
 #include "../network/SessionEvent.h"
 #include "../utils/MutexGuard.h"
 #include <Arduino.h>
 #include <time.h>
 
+// SessionEventMessage.timestamp must be true UTC epoch so the cloud-side
+// shadow-relay → gcal-api pipeline computes the right calendar window. See
+// the analogous extern in ShadowPublisher.cpp for the BM8563/system-clock
+// rationale.
+extern TimeManager* g_timeManager;
+
 namespace {
+
+uint32_t nowEpochUtc() {
+    if (g_timeManager) return g_timeManager->getEpoch();
+    return static_cast<uint32_t>(time(nullptr));
+}
+
 // Send an event to the network task. On full, drop oldest so the freshest
 // event still gets through (webhooks/shadow can't catch up to a backed-up
 // queue anyway).
@@ -127,7 +140,7 @@ bool TimerStateMachine::handleEvent(Event event) {
                 // emit its own STATE_CHANGED event from enterState().
                 {
                     SessionEventMessage ev{};
-                    ev.timestamp      = static_cast<uint32_t>(time(nullptr));
+                    ev.timestamp      = nowEpochUtc();
                     ev.device_state   = static_cast<uint8_t>(State::ACTIVE);
                     ev.session_type   = static_cast<uint8_t>(finishing.type);
                     ev.duration_min   = finishing.duration_min;
@@ -442,7 +455,7 @@ void TimerStateMachine::enterState(State new_state) {
     {
         SessionEventMessage ev{};
         ev.type           = SessionEvent::STATE_CHANGED;
-        ev.timestamp      = static_cast<uint32_t>(time(nullptr));
+        ev.timestamp      = nowEpochUtc();
         ev.device_state   = static_cast<uint8_t>(new_state);
         ev.session_type   = static_cast<uint8_t>(sequence.getCurrentSession().type);
         ev.duration_min   = sequence.getCurrentSession().duration_min;

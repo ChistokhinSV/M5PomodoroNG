@@ -186,6 +186,16 @@ void ScreenManager::updateStatus(uint8_t battery, bool charging, bool wifi,
     pause_screen_.updateStatus(battery, charging, wifi, mode, hour, minute);
 }
 
+void ScreenManager::setMainScreenTaskName(const char* name) {
+    if (!name) return;
+    Serial.printf("[ScreenManager] setMainScreenTaskName(\"%s\")\n", name);
+    // setTaskName is a strncpy + needs_redraw flip on MainScreen. Touching
+    // MainScreen state from Core 1 (network task) is normally a no-no, but
+    // the buffer is small enough that worst case is a single redraw cycle
+    // showing a partial string — acceptable for this rare path.
+    main_screen_.setTaskName(name);
+}
+
 void ScreenManager::handleHardwareButtons() {
     // Handle hardware button presses (BtnA, BtnB, BtnC)
     // Note: M5.update() must be called before this method

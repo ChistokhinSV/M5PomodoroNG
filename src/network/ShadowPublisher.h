@@ -32,11 +32,19 @@
  */
 class ShadowPublisher {
 public:
+    // Fires when the shadow's desired.task_name field changes. Implementation
+    // (typically wired in NetworkTask) routes this into MainScreen so the
+    // device LCD shows the project name driven by the server-side
+    // task-context consumer.
+    using TaskNameCallback = std::function<void(const char* name)>;
+
     ShadowPublisher(MQTTClient& mqtt,
                     const char* thing_name,
                     TimerStateMachine& sm,
                     PomodoroSequence& seq,
                     Statistics* stats);
+
+    void setTaskNameCallback(TaskNameCallback cb) { task_name_cb_ = std::move(cb); }
 
     // Subscribe to /shadow/update/delta. Call once after MQTT connect succeeds.
     bool subscribe();
@@ -63,10 +71,32 @@ private:
     char topic_update_[80];   // $aws/things/<thing>/shadow/update
     char topic_delta_[80];    // $aws/things/<thing>/shadow/update/delta
 
+    // Random id stamped into every reported snapshot. Server-side shadow-relay
+    // emits a device.wake event when this id changes, which is the trigger
+    // for consumer-wake-resync to look up any running Toggl entry and feed
+    // the device a start command with the right remaining-seconds offset.
+    uint32_t wake_id_;
+
     // Last delta command id we acted on; echoed in the next reported state so
     // the AWS shadow service stops re-delivering the delta. Empty when none.
-    char last_command_id_[40] = "";
+    // 64 bytes is enough for the synthesized "<thing>:<epoch>:<detail-type>"
+    // ids the server emits today (max ~55 chars). At 40 bytes it truncated
+    // and the desired/reported diff never cleared.
+    char last_command_id_[64] = "";
     char last_command_[16] = "";
+
+    // Last task_name seen from desired-state delta. Echoed in reported so the
+    // AWS shadow stops re-delivering and so the server-side can confirm the
+    // device picked up the new name.
+    char last_task_name_[64] = "";
+    TaskNameCallback task_name_cb_;
+
+    // Last seen remaining_sec_override from a desired delta. Echoed in
+    // reported so the shadow's desired/reported diff clears once we've
+    // received it — without this, every wake-resync push would leave a
+    // perpetual delta of just {remaining_sec_override}, which carries no
+    // command verb and ends up logged as "Delta: nothing actionable".
+    uint32_t last_remaining_sec_override_ = 0;
 
     // Helpers for building / posting the JSON payload.
     void renderReported(char* out, size_t out_size, const SessionEventMessage* ev);
