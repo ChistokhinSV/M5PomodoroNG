@@ -147,6 +147,41 @@ def _push_task_name_for_project(thing_name: str, api_token: str,
         log.warning("update_thing_shadow failed for %s: %s", thing_name, e)
 
 
+def _on_work_resumed(thing_name: str, detail: dict) -> None:
+    """Mirror the device's resume into Toggl — *without* creating a new
+    entry from thin air.
+
+    A device.session.work.resumed event means the firmware just transitioned
+    PAUSED → ACTIVE (typically because device-shadow pushed a "resume"
+    command in response to a Toggl start webhook). Two things could be true:
+
+      a. Toggl really does have a fresh running entry — great, adopt its id
+         so subsequent stop/complete events can target it.
+      b. The user already stopped in Toggl and the resume command we acted
+         on is stale (e.g. shadow desired was set before a WiFi drop and
+         delivered on reconnect). In this case Toggl has no running entry
+         and we must NOT call start_entry — that would create a new entry
+         the user never asked for and they'd see "the device kept
+         restarting Toggl after I stopped it".
+    """
+    api_token, ws_id, _, _ = _config()
+    existing = toggl_client.current_entry(api_token)
+    if not existing:
+        # Drop the (stale) DDB pointer so the next pause/complete doesn't
+        # try to stop a half-forgotten entry id.
+        state_store.clear_running_entry(thing_name)
+        log.info("RESUMED but no Toggl entry is running; not auto-starting "
+                 "(user likely stopped in Toggl). thing=%s", thing_name)
+        return
+
+    entry_id = int(existing["id"])
+    log.info("RESUMED: adopting Toggl entry %d for %s", entry_id, thing_name)
+    state_store.set_running_entry(thing_name, entry_id)
+    _push_task_name_for_project(
+        thing_name, api_token, ws_id, existing.get("project_id"),
+    )
+
+
 def _on_work_paused_or_completed(thing_name: str, detail: dict) -> None:
     """Stop the running Toggl entry, if any."""
     api_token, ws_id, _, _ = _config()
@@ -169,7 +204,9 @@ def _on_work_paused_or_completed(thing_name: str, detail: dict) -> None:
 # Dispatch table — adding a new device.session.* mapping is one line.
 HANDLERS = {
     ev.DEVICE_WORK_STARTED:    _on_work_started,
-    ev.DEVICE_WORK_RESUMED:    _on_work_started,
+    # NOT _on_work_started — RESUMED must never create a fresh Toggl entry.
+    # See _on_work_resumed for the stale-shadow-delta scenario.
+    ev.DEVICE_WORK_RESUMED:    _on_work_resumed,
     ev.DEVICE_WORK_PAUSED:     _on_work_paused_or_completed,
     ev.DEVICE_WORK_COMPLETED:  _on_work_paused_or_completed,
     ev.DEVICE_BREAK_STARTED:   _on_work_paused_or_completed,
