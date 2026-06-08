@@ -68,6 +68,24 @@ def _publish_task_name(thing_name: str, task_name: str) -> None:
     )
 
 
+def _sanitize_for_ddb(value):
+    """DynamoDB rejects empty strings and chokes on Nones embedded in
+    nested dicts/lists. Recursively drop Nones and empty strings so a
+    put_item never blows up on a single dirty field."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            cleaned = _sanitize_for_ddb(v)
+            if cleaned is not None:
+                out[k] = cleaned
+        return out
+    if isinstance(value, list):
+        return [_sanitize_for_ddb(v) for v in value if v is not None and v != ""]
+    if value == "" or value is None:
+        return None
+    return value
+
+
 def handler(event: dict, context) -> dict:
     detail_type = event.get("detail-type") or event.get("DetailType")
     detail = event.get("detail") or {}
@@ -85,26 +103,42 @@ def handler(event: dict, context) -> dict:
     provider = _provider_from_detail_type(detail_type)
     task_name = _choose_task_name(detail)
 
-    # Stash provider-specific tokens opaquely. Toggl: project_id, etc.
-    # Plus project_name and project_color so downstream consumers
-    # (gcal_api in particular) can render the label and pick a calendar
-    # color matching the Toggl project without a second webhook lookup.
+    # --- Step 1: push to shadow FIRST. This is what the device LCD waits
+    # on; a downstream DDB error must never block it.
+    shadow_ok = False
+    try:
+        _publish_task_name(thing_name, task_name)
+        log.info("Published desired.task_name=%r to thing=%s",
+                 task_name, thing_name)
+        shadow_ok = True
+    except Exception as e:                          # noqa: BLE001
+        log.error("update_thing_shadow failed for %s: %s", thing_name, e)
+
+    # --- Step 2: persist context to DDB. consumer-toggl-api reads this on
+    # the next device-initiated start; consumer-gcal-api reads project_color
+    # from here when painting the calendar entry.
     kept_keys = {"description", "tags", "project_name", "project_color"}
-    provider_ref = {
+    raw_ref = {
         k: v for k, v in detail.items()
         if k.startswith(f"{provider}_") or k in kept_keys
     }
+    provider_ref = _sanitize_for_ddb(raw_ref) or {}
+    try:
+        state_store.set_task_context(
+            thing_name,
+            task_name=task_name,
+            provider=provider,
+            provider_ref=provider_ref,
+        )
+        log.info("Stored task_context thing=%s provider=%s task_name=%r ref_keys=%s",
+                 thing_name, provider, task_name, sorted(provider_ref.keys()))
+    except Exception as e:                          # noqa: BLE001
+        log.error("set_task_context failed for %s: %s (ref=%r)",
+                  thing_name, e, provider_ref)
 
-    state_store.set_task_context(
-        thing_name,
-        task_name=task_name,
-        provider=provider,
-        provider_ref=provider_ref,
-    )
-    log.info("Stored task_context thing=%s provider=%s task_name=%r",
-             thing_name, provider, task_name)
-
-    _publish_task_name(thing_name, task_name)
-    log.info("Published desired.task_name=%r to thing=%s", task_name, thing_name)
-
-    return {"ok": True, "task_name": task_name, "provider": provider}
+    return {
+        "ok":          shadow_ok,
+        "task_name":   task_name,
+        "provider":    provider,
+        "shadow_ok":   shadow_ok,
+    }

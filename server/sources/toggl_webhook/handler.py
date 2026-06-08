@@ -109,6 +109,8 @@ def _resolve_project_info(project_id: int,
 
     name  = data.get("name")
     color = data.get("color")  # "#RRGGBB" per Toggl v9
+    log.info("Toggl project %s/%s resolved name=%r color=%r",
+             workspace_id, project_id, name, color)
     if name:
         _project_info_cache[project_id] = (name, color)
     return name, color
