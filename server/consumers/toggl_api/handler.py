@@ -138,7 +138,15 @@ def _push_task_name_for_project(thing_name: str, api_token: str,
     if not desired:
         return
 
-    body = json.dumps({"state": {"desired": desired}}).encode("utf-8")
+    # Mirror each desired key into reported as null so AWS always sees a
+    # diff and delivers the field — even when reported.task_name happens
+    # to match desired (e.g. shadow carries a stale value from before a
+    # reflash and the device's in-memory last_task_name_ reset to empty
+    # at boot). Same pattern as device_shadow's reported.command nulling.
+    reported_clear = {k: None for k in desired}
+    body = json.dumps({
+        "state": {"desired": desired, "reported": reported_clear}
+    }).encode("utf-8")
     try:
         _iot_data.update_thing_shadow(thingName=thing_name, payload=body)
         log.info("Pushed desired %s -> shadow for %s",

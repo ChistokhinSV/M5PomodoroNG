@@ -182,7 +182,10 @@ def test_work_started_pushes_task_name_to_shadow(fake_toggl, fake_store, fake_io
     """The whole point of this server-side push: device LCD shouldn't have
     to wait 5–10 s for the Toggl webhook to round-trip back. After
     start_entry, we resolve project name + colour and write desired
-    straight to the shadow."""
+    straight to the shadow. We also clear the matching reported keys so
+    AWS always computes a non-empty diff (otherwise a stale
+    reported.task_name from before the device's last reflash silently
+    swallows the delta)."""
     fake_toggl.get_project.return_value = {
         "name": "Learning Networking", "color": "#0b83d9",
     }
@@ -195,6 +198,9 @@ def test_work_started_pushes_task_name_to_shadow(fake_toggl, fake_store, fake_io
     desired = payload["state"]["desired"]
     assert desired["task_name"] == "Learning Networking"
     assert desired["project_color"] == "#0b83d9"
+    # Reported clear forces the delta to land on a freshly-booted device.
+    assert payload["state"]["reported"]["task_name"]    is None
+    assert payload["state"]["reported"]["project_color"] is None
 
 
 def test_adopt_existing_entry_also_pushes_task_name(fake_toggl, fake_store, fake_iot):

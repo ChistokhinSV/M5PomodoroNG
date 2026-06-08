@@ -61,7 +61,21 @@ def _choose_task_name(detail: dict) -> str:
 
 
 def _publish_task_name(thing_name: str, task_name: str) -> None:
-    body = {"state": {"desired": {"task_name": task_name}}}
+    """Write desired.task_name AND clear reported.task_name in the same
+    update. The clear is what guarantees the delta carries task_name even
+    when reported.task_name happens to match desired (which is the common
+    case after a reflash: shadow's reported.task_name from the previous
+    session matches the project the user is starting in Toggl now, AWS
+    sees an empty diff, the device — whose in-memory last_task_name_
+    reset to empty at boot — never receives the field and the LCD sticks
+    on 'Focus Session'). Same pattern as device_shadow's reported.command
+    nulling for the command verb."""
+    body = {
+        "state": {
+            "desired":  {"task_name": task_name},
+            "reported": {"task_name": None},
+        }
+    }
     _iot_data.update_thing_shadow(
         thingName=thing_name,
         payload=json.dumps(body).encode("utf-8"),
