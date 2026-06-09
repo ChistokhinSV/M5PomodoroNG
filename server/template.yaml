@@ -486,6 +486,13 @@ Resources:
             - Effect: Allow
               Action: [iot:GetThingShadow, iot:UpdateThingShadow]
               Resource: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:thing/${ThingName}
+            # Read task_context to look up the previous Toggl project
+            # name for the same_project comparison. (Reading the shadow's
+            # reported.task_name races with task_context's nullify-clear
+            # trick — see _previous_task_name in handler.py.)
+            - Effect: Allow
+              Action: dynamodb:GetItem
+              Resource: !GetAtt StateTable.Arn
 
   DeviceShadowLogGroup:
     Type: AWS::Logs::LogGroup

@@ -20,6 +20,11 @@ THING = "M5StackCore2"
 def _shadow_payload(device_state: str, session_type: str = "work",
                     task_name: str = "",
                     command_id: str = "") -> dict:
+    """task_name is kept in the helper signature for legacy callers but
+    isn't used in the same_project comparison anymore — that lookup goes
+    through DDB task_context (see fake_ctx fixture). It only stays here
+    because some tests assert nothing about it and removing the kwarg
+    would churn every test for no benefit."""
     body = {"state": {"reported": {
         "device_state":  device_state,
         "session_type":  session_type,
@@ -50,15 +55,27 @@ def _no_real_sleep(monkeypatch):
     monkeypatch.setattr(device_shadow.time, "sleep", lambda _s: None)
 
 
+@pytest.fixture(autouse=True)
+def fake_ctx(monkeypatch):
+    """Stand-in for state_store.get_task_context. Tests that care about
+    a previous task_name populate ctx_store via the returned dict before
+    calling the handler. Otherwise default is no context (first-ever
+    encounter)."""
+    ctx_store = {}
+    def get(thing): return ctx_store.get(thing)
+    monkeypatch.setattr(device_shadow.state_store, "get_task_context", get)
+    return ctx_store
+
+
 # ---------------------------------------------------------------------------
 # Bug 1 (paused-stalled) is the regression to defend most carefully.
 # ---------------------------------------------------------------------------
 
-def test_paused_same_project_resumes():
+def test_paused_same_project_resumes(fake_ctx):
     iot = device_shadow._iot_data
-    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload(
-        "paused", task_name="Learning Networking"))
+    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload("paused"))
     iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Learning Networking"}
 
     resp = device_shadow.handler(
         _event(ev.EXTERNAL_TOGGL_STARTED, project_name="Learning Networking"),
@@ -69,15 +86,16 @@ def test_paused_same_project_resumes():
     assert body["state"]["desired"]["command"] == "resume"
 
 
-def test_paused_different_project_stops_then_starts(monkeypatch):
+def test_paused_different_project_stops_then_starts(monkeypatch, fake_ctx):
     iot = device_shadow._iot_data
     # First call: paused. Subsequent calls (ack poll + after-step reads):
     # device echoes the step's command_id so the wait returns True.
     iot.get_thing_shadow = MagicMock(side_effect=[
-        _shadow_payload("paused", task_name="Old Project"),
+        _shadow_payload("paused"),
         _shadow_payload("idle", command_id="evt-2#0#stop"),  # ack of step 0
     ])
     iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Old Project"}
 
     resp = device_shadow.handler(
         _event(ev.EXTERNAL_TOGGL_STARTED,
@@ -110,11 +128,11 @@ def test_idle_starts():
 # active(work)
 # ---------------------------------------------------------------------------
 
-def test_active_work_same_project_is_noop():
+def test_active_work_same_project_is_noop(fake_ctx):
     iot = device_shadow._iot_data
-    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload(
-        "active", task_name="Same Project"))
+    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload("active"))
     iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Same Project"}
 
     resp = device_shadow.handler(
         _event(ev.EXTERNAL_TOGGL_STARTED, project_name="Same Project"), None,
@@ -123,13 +141,14 @@ def test_active_work_same_project_is_noop():
     iot.update_thing_shadow.assert_not_called()
 
 
-def test_active_work_different_project_stops_then_starts():
+def test_active_work_different_project_stops_then_starts(fake_ctx):
     iot = device_shadow._iot_data
     iot.get_thing_shadow = MagicMock(side_effect=[
-        _shadow_payload("active", task_name="Old"),
+        _shadow_payload("active"),
         _shadow_payload("idle", command_id="evt-3#0#stop"),
     ])
     iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Old"}
 
     resp = device_shadow.handler(
         _event(ev.EXTERNAL_TOGGL_STARTED,
@@ -223,13 +242,37 @@ def test_idle_stop_is_noop():
 # project comparison falls back to description when no project_name is set
 # ---------------------------------------------------------------------------
 
-def test_no_project_name_uses_description_as_label():
+def test_no_project_name_uses_description_as_label(fake_ctx):
     iot = device_shadow._iot_data
-    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload(
-        "paused", task_name="Ad-hoc thing"))
+    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload("paused"))
     iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Ad-hoc thing"}
 
     resp = device_shadow.handler(
         _event(ev.EXTERNAL_TOGGL_STARTED, description="Ad-hoc thing"), None,
     )
     assert resp["command"] == "resume"
+
+
+def test_active_same_project_does_not_race_with_null_clear(fake_ctx):
+    """Real device log regression: the same EventBridge event fires
+    task_context (which writes desired.task_name AND nullifies
+    reported.task_name) and device_shadow in parallel. If device_shadow
+    reads shadow.reported.task_name after the null clear it sees None
+    and would compute same_project=False → stop+start, even though the
+    project hasn't changed. DDB task_context.task_name is the
+    authoritative source instead and isn't clobbered."""
+    iot = device_shadow._iot_data
+    # Even though shadow's reported.task_name is empty (e.g. mid null-clear),
+    # the DDB context has the previous project from earlier Toggl webhooks.
+    iot.get_thing_shadow = MagicMock(return_value=_shadow_payload(
+        "active", task_name=""))
+    iot.update_thing_shadow = MagicMock()
+    fake_ctx[THING] = {"task_name": "Learning Networking"}
+
+    resp = device_shadow.handler(
+        _event(ev.EXTERNAL_TOGGL_STARTED,
+               project_name="Learning Networking"), None,
+    )
+    assert resp.get("skipped") == "already_running_same_project"
+    iot.update_thing_shadow.assert_not_called()

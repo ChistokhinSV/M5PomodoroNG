@@ -38,6 +38,7 @@ import time
 import boto3
 
 from shared import events as ev
+from shared import state_store
 
 log = logging.getLogger()
 log.setLevel(logging.INFO)
@@ -131,13 +132,36 @@ def _publish_sequence(thing_name: str, commands: list[str],
     return {"ok": True, "sequence": commands}
 
 
+def _previous_task_name(thing_name: str) -> str:
+    """Return the device's last-seen project name from DDB task_context.
+
+    We deliberately do NOT read reported.task_name from the device shadow:
+    the parallel consumer-task-context Lambda nullifies reported.task_name
+    in the very same shadow update where it writes desired.task_name (the
+    null trick that lets a freshly-booted device receive the field). If
+    we read the shadow here we race with that clear and can briefly see
+    None, which makes same_project return False for a project that
+    didn't actually change — the device then suffers a stop+start it
+    shouldn't.
+
+    DDB's task_context row is the authoritative "what project was the
+    device tracking last". consumer-task-context writes it AFTER its
+    shadow publish, so reading it here naturally gives us the value from
+    the PREVIOUS Toggl event — which is exactly what we need for the
+    same_project comparison."""
+    ctx = state_store.get_task_context(thing_name)
+    if not ctx:
+        return ""
+    return (ctx.get("task_name") or "").strip()
+
+
 def _handle_toggl_start(thing_name: str, detail: dict, event_id: str) -> dict:
     """Project-aware start. Resume same project, restart (stop+start) on
     project change, leave breaks alone."""
     reported = _get_reported_state(thing_name)
     state = reported.get("device_state")
     session = reported.get("session_type")
-    current_name = (reported.get("task_name") or "").strip()
+    current_name = _previous_task_name(thing_name)
     incoming_name = _incoming_task_name(detail)
     same_project = bool(incoming_name) and incoming_name == current_name
 
