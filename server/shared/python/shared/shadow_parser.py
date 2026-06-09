@@ -98,6 +98,7 @@ def parse(thing_name: str, document: dict) -> list[dict]:
     prev_state        = prev.get("device_state")
     cur_state         = cur.get("device_state")
     prev_session_type = prev.get("session_type")
+    transition_emitted = False
 
     # work_started / work_resumed: anything → active/work
     if (cur_state == "active" and session_type == "work"
@@ -106,10 +107,12 @@ def parse(thing_name: str, document: dict) -> list[dict]:
             out.append(_build(ev.DEVICE_WORK_RESUMED))
         else:  # idle, None, or any unexpected previous state
             out.append(_build(ev.DEVICE_WORK_STARTED))
+        transition_emitted = True
 
     # work_paused: active/work → paused
     elif cur_state == "paused" and prev_state == "active":
         out.append(_build(ev.DEVICE_WORK_PAUSED))
+        transition_emitted = True
 
     # break_started: active/work → active/break (device_state unchanged, only
     # session_type flips). Anchor on session_type changing while we stay in
@@ -118,6 +121,7 @@ def parse(thing_name: str, document: dict) -> list[dict]:
             and session_type in ("short_break", "long_break")
             and prev_session_type == "work"):
         out.append(_build(ev.DEVICE_BREAK_STARTED))
+        transition_emitted = True
 
     # --- completion events (last_event) -------------------------------------
     # last_event_at is set when the device records a session-boundary event.
@@ -127,14 +131,37 @@ def parse(thing_name: str, document: dict) -> list[dict]:
     # the next session — the state delta alone would miss "work finished."
     prev_event_at = prev.get("last_event_at") or 0
     cur_event_at  = cur.get("last_event_at")  or 0
+    last_event    = cur.get("last_event")
     if cur_event_at and cur_event_at != prev_event_at:
-        last_event = cur.get("last_event")
         if last_event == "work_complete":
             out.append(_build(ev.DEVICE_WORK_COMPLETED, ts_override=cur_event_at))
         elif last_event == "break_complete":
             out.append(_build(ev.DEVICE_BREAK_COMPLETED, ts_override=cur_event_at))
         elif last_event == "cycle_complete":
             out.append(_build(ev.DEVICE_CYCLE_COMPLETED, ts_override=cur_event_at))
+
+    # --- state-changed catchup ---------------------------------------------
+    # If the device transitions while MQTT is offline (WiFi takes 5–10s to
+    # come up after a reboot, and a quick BtnA press happens long before
+    # then) the first snapshot it publishes once connected shows the *final*
+    # device_state. Shadow's prior reported.device_state from the previous
+    # session may already match it, so the device_state diff above doesn't
+    # fire. The firmware also publishes an explicit STATE_CHANGED event with
+    # last_event="state_changed" and a fresh last_event_at — synthesise the
+    # right device.session.* from cur_state when the transition branch above
+    # didn't already emit something.
+    if (not transition_emitted
+            and last_event == "state_changed"
+            and cur_event_at and cur_event_at != prev_event_at):
+        if cur_state == "active" and session_type == "work":
+            out.append(_build(ev.DEVICE_WORK_STARTED, ts_override=cur_event_at))
+        elif cur_state == "paused":
+            out.append(_build(ev.DEVICE_WORK_PAUSED, ts_override=cur_event_at))
+        elif (cur_state == "active"
+              and session_type in ("short_break", "long_break")):
+            out.append(_build(ev.DEVICE_BREAK_STARTED, ts_override=cur_event_at))
+        # cur_state == "idle" could mean stop / cycle reset / cycle end —
+        # too ambiguous to synthesise an event, so leave it alone.
 
     # --- wake (boot / sleep wake) ------------------------------------------
     # wake_id is a per-boot random value the firmware stamps in every reported

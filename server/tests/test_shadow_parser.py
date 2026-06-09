@@ -119,6 +119,62 @@ def test_completion_uses_document_timestamp_not_device_clock():
     assert detail["timestamp"] == 99999
 
 
+# --- state-changed catchup (offline-transition recovery) -----------------
+
+def test_state_changed_catchup_emits_work_started():
+    """Real device boot log scenario: user pressed Start before WiFi/MQTT
+    came up. By the time the first shadow snapshot lands, shadow's prior
+    reported.device_state (from a previous session) already matches the
+    new "active" — so the device_state diff branch misses the WORK_STARTED.
+    The firmware's explicit STATE_CHANGED event update has a fresh
+    last_event_at + last_event='state_changed', which the catchup uses to
+    synthesise the event."""
+    prev = {"device_state": "active", "session_type": "work", "last_event_at": 100}
+    cur  = {"device_state": "active", "session_type": "work",
+            "last_event": "state_changed", "last_event_at": 200}
+    out = shadow_parser.parse(THING, _doc(prev, cur, timestamp=300))
+    assert _types(out) == [ev.DEVICE_WORK_STARTED]
+
+
+def test_state_changed_catchup_paused():
+    """Same offline-transition recovery, but device ended up PAUSED."""
+    prev = {"device_state": "paused", "session_type": "work", "last_event_at": 100}
+    cur  = {"device_state": "paused", "session_type": "work",
+            "last_event": "state_changed", "last_event_at": 200}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    assert _types(out) == [ev.DEVICE_WORK_PAUSED]
+
+
+def test_state_changed_catchup_idle_is_ambiguous_so_no_event():
+    """cur_state=idle could mean stop, cycle reset, cycle complete — too
+    ambiguous to invent a device.session.* event. Leave it alone."""
+    prev = {"device_state": "idle", "last_event_at": 100}
+    cur  = {"device_state": "idle",
+            "last_event": "state_changed", "last_event_at": 200}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    assert out == []
+
+
+def test_state_changed_catchup_skipped_when_diff_already_emitted():
+    """Don't double-emit: when the device_state diff branch already fired
+    WORK_STARTED (e.g. idle -> active), the catchup must not also fire."""
+    prev = {"device_state": "idle", "last_event_at": 100}
+    cur  = {"device_state": "active", "session_type": "work",
+            "last_event": "state_changed", "last_event_at": 200}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    assert _types(out) == [ev.DEVICE_WORK_STARTED]   # exactly one
+
+
+def test_state_changed_catchup_skipped_when_event_at_unchanged():
+    """No new transition signal -> no synthesis."""
+    prev = {"device_state": "active", "session_type": "work",
+            "last_event": "state_changed", "last_event_at": 200}
+    cur  = {"device_state": "active", "session_type": "work",
+            "last_event": "state_changed", "last_event_at": 200}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    assert out == []
+
+
 # --- wake_id detection ----------------------------------------------------
 
 def test_wake_id_change_emits_device_wake():
