@@ -66,6 +66,14 @@ def parse(thing_name: str, document: dict) -> list[dict]:
     week           = cur.get("week")
     lifetime       = cur.get("lifetime")
     task_name      = cur.get("task_name") or None
+    # Default to "device" so updates from pre-feature firmware (which never
+    # echoed the field) are treated as the safer, more permissive case.
+    state_change_source = (cur.get("state_change_source") or "device")
+
+    # Post-update shadow version — same number the device sees in its delta
+    # logs. Carried into every emitted event so cloud/device logs correlate
+    # 1:1.
+    shadow_version = (document.get("current") or {}).get("version")
 
     def _build(detail_type: str, *,
                ts_override: Optional[int] = None) -> dict:
@@ -86,6 +94,8 @@ def parse(thing_name: str, document: dict) -> list[dict]:
             week=week,
             lifetime=lifetime,
             task_name=task_name,
+            state_change_source=state_change_source,
+            shadow_version=shadow_version,
             event_id=ev.synth_event_id(thing_name, timestamp, detail_type),
         )
         return ev.device_event(detail_type, detail)

@@ -16,6 +16,7 @@ import os
 import boto3
 
 from shared import events as ev
+from shared import logctx
 from shared import secrets as sec
 from shared import state_store
 from shared import toggl_client
@@ -71,7 +72,7 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
     existing = toggl_client.current_entry(api_token)
     if existing:
         entry_id = int(existing["id"])
-        log.info("Adopting already-running Toggl entry %d for %s",
+        _lg().info("Adopting already-running Toggl entry %d for %s",
                  entry_id, thing_name)
         state_store.set_running_entry(thing_name, entry_id)
         _push_task_name_for_project(
@@ -92,10 +93,10 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
             project_id = int(ref["toggl_project_id"])
         if ref.get("description"):
             description = ref["description"]
-        log.info("Using stored Toggl context: project_id=%s description=%r",
-                 project_id, description)
+        _lg().info("Using stored Toggl context: project_id=%s description=%r",
+                   project_id, description)
     else:
-        log.info("No stored Toggl context; falling back to defaults")
+        _lg().info("No stored Toggl context; falling back to defaults")
 
     entry = toggl_client.start_entry(
         api_token,
@@ -105,7 +106,7 @@ def _on_work_started(thing_name: str, detail: dict) -> None:
     )
     entry_id = int(entry["id"])
     state_store.set_running_entry(thing_name, entry_id)
-    log.info("Started Toggl entry %d for %s", entry_id, thing_name)
+    _lg().info("Started Toggl entry %d for %s", entry_id, thing_name)
     _push_task_name_for_project(thing_name, api_token, ws_id, project_id)
 
 
@@ -123,7 +124,7 @@ def _push_task_name_for_project(thing_name: str, api_token: str,
             project_id=int(project_id),
         )
     except Exception as e:                          # noqa: BLE001
-        log.warning("get_project(%s) failed: %s", project_id, e)
+        _lg().warning("get_project(%s) failed: %s", project_id, e)
         return
     if not project:
         return
@@ -149,45 +150,84 @@ def _push_task_name_for_project(thing_name: str, api_token: str,
     }).encode("utf-8")
     try:
         _iot_data.update_thing_shadow(thingName=thing_name, payload=body)
-        log.info("Pushed desired %s -> shadow for %s",
-                 list(desired.keys()), thing_name)
+        _lg().info("Pushed desired %s -> shadow for %s",
+                   list(desired.keys()), thing_name)
     except Exception as e:                          # noqa: BLE001
-        log.warning("update_thing_shadow failed for %s: %s", thing_name, e)
+        _lg().warning("update_thing_shadow failed for %s: %s", thing_name, e)
 
 
 def _on_work_resumed(thing_name: str, detail: dict) -> None:
-    """Mirror the device's resume into Toggl — *without* creating a new
-    entry from thin air.
+    """Mirror the device's resume into Toggl.
 
     A device.session.work.resumed event means the firmware just transitioned
-    PAUSED → ACTIVE (typically because device-shadow pushed a "resume"
-    command in response to a Toggl start webhook). Two things could be true:
+    PAUSED → ACTIVE. There are three sub-cases distinguished by
+    state_change_source (firmware-stamped, defaulting to "device"):
 
-      a. Toggl really does have a fresh running entry — great, adopt its id
-         so subsequent stop/complete events can target it.
-      b. The user already stopped in Toggl and the resume command we acted
-         on is stale (e.g. shadow desired was set before a WiFi drop and
-         delivered on reconnect). In this case Toggl has no running entry
-         and we must NOT call start_entry — that would create a new entry
-         the user never asked for and they'd see "the device kept
-         restarting Toggl after I stopped it".
+      A. source=="device" (user pressed the unpause button / gyro / etc.):
+         Toggl has no running entry (we stopped it on the matching pause).
+         Start a fresh entry replaying the most recent project context —
+         this is the "I'm back, get Toggl going again" case.
+
+      B. source=="shadow_command" + Toggl already running: device-shadow
+         pushed a "resume" verb in response to a Toggl webhook, which means
+         the Toggl entry that fired the webhook is the one to adopt.
+
+      C. source=="shadow_command" + Toggl NOT running: stale shadow delivery
+         (e.g. WiFi drop / reconnect). Don't auto-create — that would loop
+         with whatever already stopped Toggl. Just clear the DDB pointer.
     """
-    api_token, ws_id, _, _ = _config()
+    api_token, ws_id, default_project_id, default_desc = _config()
+    source = (detail.get("state_change_source") or "device").lower()
     existing = toggl_client.current_entry(api_token)
-    if not existing:
-        # Drop the (stale) DDB pointer so the next pause/complete doesn't
-        # try to stop a half-forgotten entry id.
-        state_store.clear_running_entry(thing_name)
-        log.info("RESUMED but no Toggl entry is running; not auto-starting "
-                 "(user likely stopped in Toggl). thing=%s", thing_name)
+
+    if existing:
+        entry_id = int(existing["id"])
+        _lg().info("RESUMED source=%s: adopting Toggl entry %d for %s",
+                   source, entry_id, thing_name)
+        state_store.set_running_entry(thing_name, entry_id)
+        _push_task_name_for_project(
+            thing_name, api_token, ws_id, existing.get("project_id"),
+        )
         return
 
-    entry_id = int(existing["id"])
-    log.info("RESUMED: adopting Toggl entry %d for %s", entry_id, thing_name)
-    state_store.set_running_entry(thing_name, entry_id)
-    _push_task_name_for_project(
-        thing_name, api_token, ws_id, existing.get("project_id"),
+    if source != "device":
+        # Case C — stale shadow-driven resume + no entry to adopt. Don't
+        # create one or we'll fight with whatever stopped Toggl.
+        state_store.clear_running_entry(thing_name)
+        _lg().info("RESUMED source=%s and no Toggl entry running; "
+                   "not auto-starting (stale-delta guard). thing=%s",
+                   source, thing_name)
+        return
+
+    # Case A — device-initiated resume + no entry. Replay the user's most
+    # recent project + description, same way _on_work_started does cold-start.
+    project_id = default_project_id
+    description = default_desc
+    ctx = state_store.get_task_context(thing_name)
+    if ctx and ctx.get("provider") == "toggl":
+        ref = ctx.get("provider_ref") or {}
+        if ref.get("toggl_project_id"):
+            project_id = int(ref["toggl_project_id"])
+        if ref.get("description"):
+            description = ref["description"]
+        _lg().info("RESUMED source=device: replaying stored Toggl context "
+                   "project_id=%s description=%r thing=%s",
+                   project_id, description, thing_name)
+    else:
+        _lg().info("RESUMED source=device: no Toggl context; falling back to "
+                   "secret defaults thing=%s", thing_name)
+
+    entry = toggl_client.start_entry(
+        api_token,
+        workspace_id=ws_id,
+        project_id=project_id,
+        description=description,
     )
+    entry_id = int(entry["id"])
+    state_store.set_running_entry(thing_name, entry_id)
+    _lg().info("RESUMED source=device: started Toggl entry %d for %s",
+               entry_id, thing_name)
+    _push_task_name_for_project(thing_name, api_token, ws_id, project_id)
 
 
 def _on_work_paused_or_completed(thing_name: str, detail: dict) -> None:
@@ -201,12 +241,12 @@ def _on_work_paused_or_completed(thing_name: str, detail: dict) -> None:
         if cur:
             entry_id = int(cur["id"])
         else:
-            log.info("No running Toggl entry to stop for %s", thing_name)
+            _lg().info("No running Toggl entry to stop for %s", thing_name)
             return
 
     toggl_client.stop_entry(api_token, workspace_id=ws_id, entry_id=entry_id)
     state_store.clear_running_entry(thing_name)
-    log.info("Stopped Toggl entry %d for %s", entry_id, thing_name)
+    _lg().info("Stopped Toggl entry %d for %s", entry_id, thing_name)
 
 
 # Dispatch table — adding a new device.session.* mapping is one line.
@@ -229,17 +269,47 @@ def handler(event: dict, context) -> dict:
     detail = event.get("detail") or {}
     thing_name = detail.get("thing_name")
 
-    log.info("toggl_api detail-type=%s thing=%s detail=%s",
-             detail_type, thing_name, json.dumps(detail)[:200])
+    logger = logctx.bind(
+        log,
+        aws_request_id=logctx.request_id(context),
+        event_id=detail.get("event_id"),
+        shadow_version=detail.get("shadow_version"),
+        extra={
+            "thing": thing_name,
+            "dt":    detail_type,
+            "src":   detail.get("state_change_source"),
+        },
+    )
+
+    logger.info("toggl_api detail=%s", json.dumps(detail)[:200])
 
     if not detail_type or not thing_name:
-        log.warning("Missing detail-type or thing_name; ignoring")
+        logger.warning("Missing detail-type or thing_name; ignoring")
         return {"ok": False, "reason": "malformed"}
 
     action = HANDLERS.get(detail_type)
     if not action:
-        log.info("No action mapped for %s; skipping", detail_type)
+        logger.info("No action mapped for %s; skipping", detail_type)
         return {"ok": True, "skipped": detail_type}
 
-    action(thing_name, detail)
+    # Stash the logger on a thread-safe-ish module variable so the per-event
+    # handler functions can access it without passing an extra arg through
+    # every function signature. Lambda warm-restarts run handler() one event
+    # at a time so there's no concurrency to race with.
+    global _current_logger
+    _current_logger = logger
+    try:
+        action(thing_name, detail)
+    finally:
+        _current_logger = log  # back to base for any out-of-band logs
+
     return {"ok": True, "handled": detail_type}
+
+
+# Default to the module logger until handler() binds the request scope.
+_current_logger = log
+
+
+def _lg():
+    """Accessor so per-event helpers pick up the request-scoped adapter."""
+    return _current_logger

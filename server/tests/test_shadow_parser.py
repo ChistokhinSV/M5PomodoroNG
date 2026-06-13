@@ -10,10 +10,16 @@ from shared import shadow_parser, events as ev
 THING = "M5StackCore2"
 
 
-def _doc(prev_reported, cur_reported, *, timestamp=1700000000):
+def _doc(prev_reported, cur_reported, *, timestamp=1700000000,
+         version=None):
+    cur_payload: dict | None = None
+    if cur_reported is not None:
+        cur_payload = {"state": {"reported": cur_reported}}
+        if version is not None:
+            cur_payload["version"] = version
     return {
         "previous": {"state": {"reported": prev_reported}} if prev_reported else None,
-        "current":  {"state": {"reported": cur_reported}}  if cur_reported  else None,
+        "current":  cur_payload,
         "timestamp": timestamp,
     }
 
@@ -204,3 +210,61 @@ def test_same_wake_id_no_event():
     cur  = {"wake_id": 4444, "device_state": "active"}
     out = shadow_parser.parse(THING, _doc(prev, cur))
     assert ev.DEVICE_WAKE not in _types(out)
+
+
+# --- state_change_source + shadow_version propagation -------------------
+
+import json as _json
+
+
+def _first_detail(entries):
+    """Return the parsed Detail dict from the first emitted event."""
+    assert entries, "expected at least one event"
+    return _json.loads(entries[0]["Detail"])
+
+
+def test_resume_carries_state_change_source_device():
+    """User pressed unpause: firmware stamps state_change_source="device".
+    toggl_api uses this to know it should start a fresh Toggl entry."""
+    prev = {"device_state": "paused", "session_type": "work"}
+    cur  = {"device_state": "active", "session_type": "work",
+            "state_change_source": "device"}
+    out = shadow_parser.parse(THING, _doc(prev, cur, version=42))
+    assert _types(out) == [ev.DEVICE_WORK_RESUMED]
+    d = _first_detail(out)
+    assert d["state_change_source"] == "device"
+    assert d["shadow_version"] == 42
+
+
+def test_resume_carries_state_change_source_shadow_command():
+    """Shadow delta drove the resume (e.g. external.toggl.timer.started). The
+    field flows through unchanged so toggl_api can suppress the auto-create."""
+    prev = {"device_state": "paused", "session_type": "work"}
+    cur  = {"device_state": "active", "session_type": "work",
+            "state_change_source": "shadow_command"}
+    out = shadow_parser.parse(THING, _doc(prev, cur, version=99))
+    assert _types(out) == [ev.DEVICE_WORK_RESUMED]
+    d = _first_detail(out)
+    assert d["state_change_source"] == "shadow_command"
+
+
+def test_state_change_source_defaults_to_device_when_missing():
+    """Pre-feature firmware doesn't emit state_change_source. Default to
+    'device' so the user's button-press intent is honoured. The opposite
+    default would silently turn unpause into a noop on old firmware."""
+    prev = {"device_state": "paused", "session_type": "work"}
+    cur  = {"device_state": "active", "session_type": "work"}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    d = _first_detail(out)
+    assert d["state_change_source"] == "device"
+
+
+def test_shadow_version_omitted_when_missing():
+    """No version field in the shadow doc (test fixture default) -> the
+    DeviceSessionDetail just doesn't carry shadow_version. _to_json drops
+    Nones so the field is absent rather than null in the EventBridge JSON."""
+    prev = {"device_state": "idle"}
+    cur  = {"device_state": "active", "session_type": "work"}
+    out = shadow_parser.parse(THING, _doc(prev, cur))
+    d = _first_detail(out)
+    assert "shadow_version" not in d

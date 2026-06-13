@@ -98,6 +98,21 @@ private:
     // command verb and ends up logged as "Delta: nothing actionable".
     uint32_t last_remaining_sec_override_ = 0;
 
+    // project_color is written by consumer-toggl-api alongside task_name
+    // (so a future GCal renderer can tint events). The firmware doesn't
+    // render it today, but echoing it back is what clears the AWS
+    // desired/reported diff — without this the device sees a perpetual
+    // {project_color: "..."} delta logged as "nothing actionable" after
+    // every legitimate task_name update. 8 bytes fits "#RRGGBB" + NUL.
+    char last_project_color_[8] = "";
+
+    // Last state-change source we relayed to the cloud. Always echoed back
+    // in reported so the cloud-side shadow_parser can attribute device
+    // transitions to button presses vs shadow-driven commands (the latter
+    // must NOT cause toggl-api to auto-restart a Toggl entry on resume).
+    // Values: "device" / "shadow_command".
+    char last_state_change_source_[16] = "device";
+
     // Helpers for building / posting the JSON payload.
     void renderReported(char* out, size_t out_size, const SessionEventMessage* ev);
     void handleShadowDelta(const char* json, size_t len);

@@ -23,6 +23,7 @@ import os
 from datetime import datetime, timezone
 
 from shared import events as ev
+from shared import logctx
 from shared import secrets as sec
 from shared import state_store
 
@@ -91,11 +92,16 @@ def handler(event: dict, context) -> dict:
     thing_name = detail.get("thing_name")
     event_id   = detail.get("event_id")
 
-    log.info("gcal_api detail-type=%s thing=%s detail=%s",
-             detail_type, thing_name, json.dumps(detail)[:200])
+    logger = logctx.bind(
+        log, aws_request_id=logctx.request_id(context),
+        event_id=event_id,
+        shadow_version=detail.get("shadow_version"),
+        extra={"thing": thing_name, "dt": detail_type},
+    )
+    logger.info("gcal_api detail=%s", json.dumps(detail)[:200])
 
     if not detail_type or not thing_name or not event_id:
-        log.warning("Missing detail-type / thing_name / event_id; ignoring")
+        logger.warning("Missing detail-type / thing_name / event_id; ignoring")
         return {"ok": False, "reason": "malformed"}
 
     sa_info = _service_account_info()
@@ -106,15 +112,15 @@ def handler(event: dict, context) -> dict:
         sa_info, calendar_id=CALENDAR_ID, key="event_id", value=event_id
     )
     if existing:
-        log.info("GCal already has event for event_id=%s (id=%s); no-op",
-                 event_id, existing.get("id"))
+        logger.info("GCal already has event (id=%s); no-op",
+                    existing.get("id"))
         return {"ok": True, "skipped": "exists_in_gcal"}
 
     # Pull project color from the latest task_context the webhook source
     # wrote to DDB. Falling back to None means GCal uses the calendar's
     # default event color — no hard failure when the device started a
     # session without a Toggl entry being active.
-    color_id = _resolve_color_id(sa_info, thing_name)
+    color_id = _resolve_color_id(sa_info, thing_name, logger)
 
     fields = _build_event(detail_type, detail)
     created = gcal_client.insert_event(
@@ -124,13 +130,13 @@ def handler(event: dict, context) -> dict:
         color_id=color_id,
         **fields,
     )
-    log.info("Inserted GCal event id=%s for %s (color_id=%s)",
-             created.get("id"), event_id, color_id)
+    logger.info("Inserted GCal event id=%s color_id=%s",
+                created.get("id"), color_id)
     return {"ok": True, "gcal_event_id": created.get("id"),
             "color_id": color_id}
 
 
-def _resolve_color_id(sa_info: dict, thing_name: str) -> str | None:
+def _resolve_color_id(sa_info: dict, thing_name: str, logger) -> str | None:
     """Map the per-device project_color (set by task_context on the latest
     timer-start webhook) to one of GCal's 11 event color ids.
 
@@ -139,7 +145,7 @@ def _resolve_color_id(sa_info: dict, thing_name: str) -> str | None:
     try:
         ctx = state_store.get_task_context(thing_name)
     except Exception as e:                              # noqa: BLE001
-        log.warning("task_context lookup failed for %s: %s", thing_name, e)
+        logger.warning("task_context lookup failed: %s", e)
         return None
     if not ctx:
         return None

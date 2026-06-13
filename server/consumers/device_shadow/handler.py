@@ -38,6 +38,7 @@ import time
 import boto3
 
 from shared import events as ev
+from shared import logctx
 from shared import state_store
 
 log = logging.getLogger()
@@ -51,11 +52,11 @@ REGION = os.environ.get("AWS_REGION", "eu-central-1")
 _iot_data = boto3.client("iot-data", region_name=REGION)
 
 
-def _get_reported_state(thing_name: str) -> dict:
+def _get_reported_state(thing_name: str, logger) -> dict:
     try:
         resp = _iot_data.get_thing_shadow(thingName=thing_name)
     except _iot_data.exceptions.ResourceNotFoundException:
-        log.warning("No shadow yet for thing=%s", thing_name)
+        logger.warning("No shadow yet for thing=%s", thing_name)
         return {}
     payload = json.loads(resp["payload"].read())
     return (payload.get("state") or {}).get("reported") or {}
@@ -95,7 +96,7 @@ def _incoming_task_name(detail: dict) -> str:
     return name
 
 
-def _wait_for_command_ack(thing_name: str, command_id: str,
+def _wait_for_command_ack(thing_name: str, command_id: str, logger,
                           timeout_s: float = 4.0) -> bool:
     """Poll shadow.reported.command_id until it matches what we just
     published, or until timeout. Used to serialize multi-step command
@@ -105,9 +106,9 @@ def _wait_for_command_ack(thing_name: str, command_id: str,
     while time.time() < deadline:
         time.sleep(0.25)
         try:
-            reported = _get_reported_state(thing_name)
+            reported = _get_reported_state(thing_name, logger)
         except Exception as exc:
-            log.warning("ack-poll get_thing_shadow failed: %s", exc)
+            logger.warning("ack-poll get_thing_shadow failed: %s", exc)
             continue
         if reported.get("command_id") == command_id:
             return True
@@ -115,20 +116,20 @@ def _wait_for_command_ack(thing_name: str, command_id: str,
 
 
 def _publish_sequence(thing_name: str, commands: list[str],
-                      event_id_base: str) -> dict:
+                      event_id_base: str, logger) -> dict:
     """Push a sequence of desired commands, waiting for each device ack
     before sending the next. Each step gets a derived command_id so the
     firmware can tell them apart."""
     for i, cmd in enumerate(commands):
         cmd_id = f"{event_id_base}#{i}#{cmd}"
         _publish_desired_command(thing_name, cmd, cmd_id)
-        log.info("Sequence step %d/%d: command=%s id=%s",
-                 i + 1, len(commands), cmd, cmd_id)
+        logger.info("Sequence step %d/%d: command=%s id=%s",
+                    i + 1, len(commands), cmd, cmd_id)
         if i < len(commands) - 1:
-            acked = _wait_for_command_ack(thing_name, cmd_id)
+            acked = _wait_for_command_ack(thing_name, cmd_id, logger)
             if not acked:
-                log.warning("Device didn't ack '%s' (id=%s) within timeout; "
-                            "sending next step anyway", cmd, cmd_id)
+                logger.warning("Device didn't ack '%s' (id=%s) within timeout; "
+                               "sending next step anyway", cmd, cmd_id)
     return {"ok": True, "sequence": commands}
 
 
@@ -155,18 +156,19 @@ def _previous_task_name(thing_name: str) -> str:
     return (ctx.get("task_name") or "").strip()
 
 
-def _handle_toggl_start(thing_name: str, detail: dict, event_id: str) -> dict:
+def _handle_toggl_start(thing_name: str, detail: dict, event_id: str,
+                        logger) -> dict:
     """Project-aware start. Resume same project, restart (stop+start) on
     project change, leave breaks alone."""
-    reported = _get_reported_state(thing_name)
+    reported = _get_reported_state(thing_name, logger)
     state = reported.get("device_state")
     session = reported.get("session_type")
     current_name = _previous_task_name(thing_name)
     incoming_name = _incoming_task_name(detail)
     same_project = bool(incoming_name) and incoming_name == current_name
 
-    log.info("toggl.start state=%s session=%s incoming=%r current=%r same=%s",
-             state, session, incoming_name, current_name, same_project)
+    logger.info("toggl.start state=%s session=%s incoming=%r current=%r same=%s",
+                state, session, incoming_name, current_name, same_project)
 
     if state == "idle":
         _publish_desired_command(thing_name, "start", event_id)
@@ -177,12 +179,12 @@ def _handle_toggl_start(thing_name: str, detail: dict, event_id: str) -> dict:
             _publish_desired_command(thing_name, "resume", event_id)
             return {"ok": True, "command": "resume", "reason": "same_project"}
         # Different (or unknown) project -> reset and start fresh.
-        return _publish_sequence(thing_name, ["stop", "start"], event_id)
+        return _publish_sequence(thing_name, ["stop", "start"], event_id, logger)
 
     if state == "active" and session == "work":
         if same_project:
             return {"ok": True, "skipped": "already_running_same_project"}
-        return _publish_sequence(thing_name, ["stop", "start"], event_id)
+        return _publish_sequence(thing_name, ["stop", "start"], event_id, logger)
 
     if state == "active" and session in ("short_break", "long_break"):
         # User started a Toggl timer mid-break — they're ready to work again.
@@ -190,15 +192,16 @@ def _handle_toggl_start(thing_name: str, detail: dict, event_id: str) -> dict:
         # break timer; START kicks off that next work interval. Project
         # comparison isn't useful here (no work session to compare against),
         # the rendered task_name comes from the parallel task-context update.
-        return _publish_sequence(thing_name, ["skip", "start"], event_id)
+        return _publish_sequence(thing_name, ["skip", "start"], event_id, logger)
 
     return {"ok": True, "skipped": f"no_action_in_state={state}/{session}"}
 
 
-def _handle_toggl_stop(thing_name: str, detail: dict, event_id: str) -> dict:
+def _handle_toggl_stop(thing_name: str, detail: dict, event_id: str,
+                       logger) -> dict:
     """Toggl stop pauses an in-flight work pomodoro. Stays a pause (not a
     full stop) so a re-start on the same project resumes the same session."""
-    reported = _get_reported_state(thing_name)
+    reported = _get_reported_state(thing_name, logger)
     state = reported.get("device_state")
     session = reported.get("session_type")
 
@@ -214,17 +217,23 @@ def handler(event: dict, context) -> dict:
     thing_name = detail.get("thing_name")
     event_id   = detail.get("event_id")
 
-    log.info("device_shadow detail-type=%s thing=%s detail=%s",
-             detail_type, thing_name, json.dumps(detail)[:300])
+    logger = logctx.bind(
+        log,
+        aws_request_id=logctx.request_id(context),
+        event_id=event_id,
+        extra={"thing": thing_name, "dt": detail_type},
+    )
+
+    logger.info("device_shadow detail=%s", json.dumps(detail)[:300])
 
     if not detail_type or not thing_name or not event_id:
-        log.warning("Missing detail-type / thing_name / event_id")
+        logger.warning("Missing detail-type / thing_name / event_id")
         return {"ok": False, "reason": "malformed"}
 
     if detail_type == ev.EXTERNAL_TOGGL_STARTED:
-        return _handle_toggl_start(thing_name, detail, event_id)
+        return _handle_toggl_start(thing_name, detail, event_id, logger)
     if detail_type == ev.EXTERNAL_TOGGL_STOPPED:
-        return _handle_toggl_stop(thing_name, detail, event_id)
+        return _handle_toggl_stop(thing_name, detail, event_id, logger)
 
-    log.info("No handler for detail-type=%s", detail_type)
+    logger.info("No handler for detail-type=%s", detail_type)
     return {"ok": True, "skipped": detail_type}

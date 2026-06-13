@@ -220,22 +220,30 @@ def test_resumed_with_running_entry_adopts_it(fake_toggl, fake_store, fake_iot):
     received 'resume' delta and transitioned PAUSED->ACTIVE. toggl_api
     should adopt the running entry (NOT create a new one)."""
     fake_toggl.current_entry.return_value = {"id": 5555, "project_id": 22}
-    toggl_api.handler(_event(ev.DEVICE_WORK_RESUMED), None)
+    toggl_api.handler(
+        _event(ev.DEVICE_WORK_RESUMED, state_change_source="shadow_command"),
+        None,
+    )
 
     fake_toggl.start_entry.assert_not_called()
     assert fake_store[THING] == 5555
 
 
-def test_resumed_without_running_entry_does_not_create(
+def test_resumed_shadow_source_without_running_entry_does_not_create(
     fake_toggl, fake_store, fake_iot):
-    """The bug: device received a stale 'resume' delta after a WiFi drop;
-    user had stopped in Toggl during the offline window. RESUMED must NOT
-    auto-create a Toggl entry — that's what made it look like the device
-    was restarting Toggl every time the user stopped."""
+    """The 'stale shadow delta' bug: device received a 'resume' delta after a
+    WiFi drop; user had stopped in Toggl during the offline window. With
+    state_change_source=shadow_command the source is the cloud, not the user,
+    so RESUMED must NOT auto-create a Toggl entry — that's what previously
+    made the device look like it was restarting Toggl every time the user
+    stopped."""
     fake_toggl.current_entry.return_value = None
     fake_store[THING] = 999  # stale pointer from before the user stopped
 
-    toggl_api.handler(_event(ev.DEVICE_WORK_RESUMED), None)
+    toggl_api.handler(
+        _event(ev.DEVICE_WORK_RESUMED, state_change_source="shadow_command"),
+        None,
+    )
 
     fake_toggl.start_entry.assert_not_called()
     # The stale pointer should be cleared so the next pause/complete
@@ -243,6 +251,60 @@ def test_resumed_without_running_entry_does_not_create(
     assert THING not in fake_store
     # No project info either — there's nothing to push.
     fake_toggl.get_project.assert_not_called()
+
+
+def test_resumed_device_source_without_running_entry_creates_fresh(
+    fake_toggl, fake_store, fake_iot, fake_context):
+    """User pressed the unpause button on the device after manually pausing.
+    The earlier matching pause already stopped Toggl, so no entry is running.
+    state_change_source='device' means the device-side intent is "resume my
+    work" — start a fresh Toggl entry replaying the most recent project."""
+    fake_toggl.current_entry.return_value = None
+    # Realistic stored context — user's most recent Toggl session
+    fake_context[THING] = {
+        "task_name": "Learning Networking",
+        "provider":  "toggl",
+        "provider_ref": {
+            "toggl_project_id":   42,
+            "toggl_workspace_id": 11,
+            "description":        "deep work",
+        },
+    }
+    fake_toggl.start_entry.return_value = {"id": 7777}
+    fake_toggl.get_project.return_value = {"name": "Learning Networking",
+                                            "color": "#abcdef"}
+
+    toggl_api.handler(
+        _event(ev.DEVICE_WORK_RESUMED, state_change_source="device"),
+        None,
+    )
+
+    fake_toggl.start_entry.assert_called_once()
+    call_kwargs = fake_toggl.start_entry.call_args.kwargs
+    assert call_kwargs["project_id"]   == 42
+    assert call_kwargs["description"]  == "deep work"
+    assert fake_store[THING] == 7777
+
+
+def test_resumed_default_source_is_device(
+    fake_toggl, fake_store, fake_iot, fake_context):
+    """Pre-feature firmware doesn't echo state_change_source. The cloud must
+    interpret the absence as 'device' (the safer, original behaviour the
+    user expects: button press should restart Toggl). This regression test
+    pins that default."""
+    fake_toggl.current_entry.return_value = None
+    fake_context[THING] = {
+        "task_name": "Old project",
+        "provider":  "toggl",
+        "provider_ref": {"toggl_project_id": 99},
+    }
+    fake_toggl.start_entry.return_value = {"id": 8888}
+
+    # No state_change_source key in detail at all.
+    toggl_api.handler(_event(ev.DEVICE_WORK_RESUMED), None)
+
+    fake_toggl.start_entry.assert_called_once()
+    assert fake_store[THING] == 8888
 
 
 def test_no_project_id_skips_shadow_push(fake_toggl, fake_store, fake_iot, monkeypatch):

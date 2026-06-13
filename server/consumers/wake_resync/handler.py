@@ -36,6 +36,7 @@ import time
 import boto3
 
 from shared import events as ev
+from shared import logctx
 from shared import secrets as sec
 from shared import state_store
 from shared import toggl_client
@@ -105,18 +106,23 @@ def handler(event: dict, context) -> dict:
     device_state = (detail.get("device_state") or "").lower()
     duration_min = detail.get("duration_min")
 
-    log.info("wake_resync thing=%s state=%s duration_min=%s event_id=%s",
-             thing_name, device_state, duration_min, event_id)
+    logger = logctx.bind(
+        log, aws_request_id=logctx.request_id(context),
+        event_id=event_id,
+        extra={"thing": thing_name, "state": device_state,
+               "dur_min": duration_min},
+    )
+    logger.info("wake_resync")
 
     if not thing_name or not event_id:
         return {"ok": False, "reason": "malformed"}
 
     if device_state != "idle":
-        log.info("Device not idle (state=%s); not resyncing", device_state)
+        logger.info("Device not idle; not resyncing")
         return {"ok": True, "skipped": f"state={device_state}"}
 
     if not duration_min or duration_min <= 0:
-        log.info("No usable duration_min in wake event; skip")
+        logger.info("No usable duration_min in wake event; skip")
         return {"ok": True, "skipped": "no_duration_min"}
 
     # --- 1. Toggl running entry --------------------------------------------
@@ -124,10 +130,10 @@ def handler(event: dict, context) -> dict:
     try:
         entry = toggl_client.current_entry(api_token)
     except Exception as e:
-        log.warning("Toggl current_entry failed: %s", e)
+        logger.warning("Toggl current_entry failed: %s", e)
         return {"ok": False, "reason": "toggl_error"}
     if not entry:
-        log.info("No running Toggl entry; nothing to resync")
+        logger.info("No running Toggl entry; nothing to resync")
         return {"ok": True, "skipped": "no_running_entry"}
 
     start_epoch = _entry_start_epoch(entry)
@@ -141,15 +147,15 @@ def handler(event: dict, context) -> dict:
     remainder = elapsed_sec % duration_sec
     remaining_sec = duration_sec - remainder
 
-    log.info("Toggl entry %d running %ds; duration=%ds; remainder=%ds; "
-             "remaining_sec=%ds",
-             int(entry.get("id", 0)), elapsed_sec, duration_sec, remainder,
-             remaining_sec)
+    logger.info("Toggl entry %d running %ds; duration=%ds; remainder=%ds; "
+                "remaining_sec=%ds",
+                int(entry.get("id", 0)), elapsed_sec, duration_sec, remainder,
+                remaining_sec)
 
     if remaining_sec < TINY_REMAINDER_S:
         # Skip to the next interval with full duration.
-        log.info("remaining_sec=%ds below threshold=%ds; using full duration",
-                 remaining_sec, TINY_REMAINDER_S)
+        logger.info("remaining_sec=%ds below threshold=%ds; using full duration",
+                    remaining_sec, TINY_REMAINDER_S)
         remaining_sec = duration_sec
 
     # --- 3. Resolve project name and mirror into DDB -----------------------
@@ -163,7 +169,7 @@ def handler(event: dict, context) -> dict:
             if project:
                 project_name = project.get("name") or None
         except Exception as e:
-            log.warning("Project lookup failed: %s", e)
+            logger.warning("Project lookup failed: %s", e)
     task_name = project_name or (entry.get("description") or "").strip() or None
 
     # Mirror context so a later device-initiated start replays the right project.
@@ -187,7 +193,8 @@ def handler(event: dict, context) -> dict:
         remaining_sec=remaining_sec,
         task_name=task_name,
     )
-    log.info("Published start: remaining=%ds task_name=%r", remaining_sec, task_name)
+    logger.info("Published start: remaining=%ds task_name=%r",
+                remaining_sec, task_name)
 
     return {
         "ok": True,

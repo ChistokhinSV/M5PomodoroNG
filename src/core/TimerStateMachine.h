@@ -53,6 +53,17 @@ public:
         SKIP
     };
 
+    // Where the event came from. Carried into the STATE_CHANGED message so
+    // the cloud-side shadow parser can tell apart "user pressed a button on
+    // the device" from "AWS shadow delta drove this transition". The
+    // distinction matters for the Toggl bridge: a device-initiated resume
+    // should restart the Toggl entry, but a shadow-driven resume must not
+    // (or we loop with whatever already restarted Toggl on Toggl's side).
+    enum class EventSource : uint8_t {
+        DEVICE = 0,  // local user action (button, gyro, timeout)
+        SHADOW = 1,  // ShadowPublisher::handleShadowDelta dispatch
+    };
+
     // Callback types for state transitions
     using StateCallback = std::function<void(State old_state, State new_state)>;
     using TimeoutCallback = std::function<void()>;
@@ -62,7 +73,7 @@ public:
     ~TimerStateMachine();
 
     // State machine control (thread-safe)
-    bool handleEvent(Event event);
+    bool handleEvent(Event event, EventSource source = EventSource::DEVICE);
     State getState() const { return state; }
     const char* getStateName() const;
 
@@ -100,6 +111,11 @@ public:
 private:
     PomodoroSequence& sequence;
     State state = State::IDLE;
+    // Source of the in-flight handleEvent call. Read by enterState() when
+    // building the STATE_CHANGED queue message. Reset back to DEVICE after
+    // each handleEvent returns so timeout-driven transitions (no caller) are
+    // attributed to the device, not to a stale shadow event.
+    EventSource current_event_source_ = EventSource::DEVICE;
     uint32_t remaining_ms = 0;
     uint32_t total_ms = 0;
     uint32_t last_warning_check_ms = 0;  // Track when we last checked for 30s warning

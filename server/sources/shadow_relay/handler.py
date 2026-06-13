@@ -24,6 +24,7 @@ import os
 
 import boto3
 
+from shared import logctx
 from shared import shadow_parser
 
 log = logging.getLogger()
@@ -35,11 +36,23 @@ _events = boto3.client(
 
 
 def handler(event: dict, context) -> dict:
-    log.info("shadow_relay event: %s", json.dumps(event)[:500])
-
     thing_name = event.get("thing_name")
+    # Shadow `version` from `current` is the same number the device prints in
+    # its [Shadow] Delta v=N logs. Surface it on every log line emitted in
+    # this invocation so cloud/device entries can be matched 1:1.
+    current_doc = (event.get("current") or {})
+    shadow_version = current_doc.get("version")
+
+    logger = logctx.bind(
+        log,
+        aws_request_id=logctx.request_id(context),
+        shadow_version=shadow_version,
+        extra={"thing": thing_name},
+    )
+    logger.info("shadow_relay event=%s", json.dumps(event)[:500])
+
     if not thing_name:
-        log.warning("No thing_name on event; dropping")
+        logger.warning("No thing_name on event; dropping")
         return {"emitted": 0}
 
     # IoT Rule passes the original shadow `documents` payload through under
@@ -53,7 +66,7 @@ def handler(event: dict, context) -> dict:
 
     entries = shadow_parser.parse(thing_name, document)
     if not entries:
-        log.info("shadow_relay produced 0 events for thing=%s", thing_name)
+        logger.info("shadow_relay produced 0 events")
         return {"emitted": 0}
 
     # EventBridge accepts up to 10 entries per PutEvents call. We only ever
@@ -61,12 +74,18 @@ def handler(event: dict, context) -> dict:
     resp = _events.put_events(Entries=entries)
     failed = resp.get("FailedEntryCount", 0)
     if failed:
-        log.error("put_events: %d/%d failed: %s",
-                  failed, len(entries), resp.get("Entries"))
+        logger.error("put_events: %d/%d failed: %s",
+                     failed, len(entries), resp.get("Entries"))
 
-    log.info(
-        "shadow_relay emitted %d events for thing=%s (%s)",
-        len(entries) - failed, thing_name,
-        ", ".join(e["DetailType"] for e in entries),
-    )
+    # Emit detail-types AND event_ids so downstream consumer logs can be
+    # joined back to this invocation by event_id alone.
+    summaries = []
+    for e in entries:
+        try:
+            d = json.loads(e["Detail"])
+            summaries.append(f"{e['DetailType']}#{d.get('event_id', '?')}")
+        except Exception:                           # noqa: BLE001
+            summaries.append(e["DetailType"])
+    logger.info("shadow_relay emitted %d events: %s",
+                len(entries) - failed, ", ".join(summaries))
     return {"emitted": len(entries) - failed, "failed": failed}

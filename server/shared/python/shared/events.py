@@ -70,6 +70,18 @@ class DeviceSessionDetail:
     # Project label echoed in the shadow when a webhook source set it.
     # gcal_api appends it to the calendar event summary.
     task_name: Optional[str] = None
+    # How the device transitioned — "device" (button/gyro/timeout) or
+    # "shadow_command" (a shadow delta drove this). Lets toggl-api tell apart
+    # a user pressing unpause (which should restart Toggl) from the cloud
+    # issuing a resume verb (which must not, or we loop with whatever
+    # restarted Toggl on the third-party side). Default attribution is
+    # "device" when the field is absent from the shadow snapshot — that's
+    # the safe legacy interpretation matching pre-feature firmware.
+    state_change_source: Optional[str] = None
+    # AWS-side shadow version of the snapshot this event was derived from.
+    # The same number appears in the device's own delta logs (`v=N`), so
+    # device-log entries can be matched 1:1 with cloud CloudWatch entries.
+    shadow_version: Optional[int] = None
 
 
 @dataclass

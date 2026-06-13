@@ -27,6 +27,7 @@ import os
 
 import boto3
 
+from shared import logctx
 from shared import state_store
 
 log = logging.getLogger()
@@ -105,13 +106,17 @@ def handler(event: dict, context) -> dict:
     detail = event.get("detail") or {}
     thing_name = detail.get("thing_name")
 
-    log.info(
-        "task_context detail-type=%s thing=%s detail=%s",
-        detail_type, thing_name, json.dumps(detail)[:200],
+    logger = logctx.bind(
+        log,
+        aws_request_id=logctx.request_id(context),
+        event_id=detail.get("event_id"),
+        extra={"thing": thing_name, "dt": detail_type},
     )
 
+    logger.info("task_context detail=%s", json.dumps(detail)[:200])
+
     if not thing_name:
-        log.warning("Missing thing_name; ignoring")
+        logger.warning("Missing thing_name; ignoring")
         return {"ok": False, "reason": "no_thing_name"}
 
     provider = _provider_from_detail_type(detail_type)
@@ -122,11 +127,10 @@ def handler(event: dict, context) -> dict:
     shadow_ok = False
     try:
         _publish_task_name(thing_name, task_name)
-        log.info("Published desired.task_name=%r to thing=%s",
-                 task_name, thing_name)
+        logger.info("Published desired.task_name=%r", task_name)
         shadow_ok = True
     except Exception as e:                          # noqa: BLE001
-        log.error("update_thing_shadow failed for %s: %s", thing_name, e)
+        logger.error("update_thing_shadow failed: %s", e)
 
     # --- Step 2: persist context to DDB. consumer-toggl-api reads this on
     # the next device-initiated start; consumer-gcal-api reads project_color
@@ -144,11 +148,10 @@ def handler(event: dict, context) -> dict:
             provider=provider,
             provider_ref=provider_ref,
         )
-        log.info("Stored task_context thing=%s provider=%s task_name=%r ref_keys=%s",
-                 thing_name, provider, task_name, sorted(provider_ref.keys()))
+        logger.info("Stored task_context provider=%s task_name=%r ref_keys=%s",
+                    provider, task_name, sorted(provider_ref.keys()))
     except Exception as e:                          # noqa: BLE001
-        log.error("set_task_context failed for %s: %s (ref=%r)",
-                  thing_name, e, provider_ref)
+        logger.error("set_task_context failed: %s (ref=%r)", e, provider_ref)
 
     return {
         "ok":          shadow_ok,

@@ -123,6 +123,18 @@ void ShadowPublisher::renderReported(char* out, size_t out_size, const SessionEv
         // network task drains the queue.
         if (ev->today_count > 0) reported["today"] = ev->today_count;
         if (ev->week_count  > 0) reported["week"]  = ev->week_count;
+        // Latch source of this state change so we can keep emitting it on
+        // every subsequent snapshot until the next state change overwrites
+        // it. Without latching, the device may publish a follow-up snapshot
+        // (e.g. seconds-tick refresh) without state_change_source, leaving
+        // shadow_parser to fall back to the default "device" attribution.
+        if (ev->type == SessionEvent::STATE_CHANGED) {
+            const char* src = ev->state_change_source == 1
+                                  ? "shadow_command" : "device";
+            strncpy(last_state_change_source_, src,
+                    sizeof(last_state_change_source_) - 1);
+            last_state_change_source_[sizeof(last_state_change_source_) - 1] = '\0';
+        }
     }
 
     // Echo the last accepted delta command so AWS shadow clears the diff
@@ -145,6 +157,17 @@ void ShadowPublisher::renderReported(char* out, size_t out_size, const SessionEv
         // no command — device logs it as "Delta: nothing actionable".
         reported["remaining_sec_override"] = last_remaining_sec_override_;
     }
+    if (last_project_color_[0]) {
+        // Echo back so AWS clears the project_color residual diff (cloud
+        // sets it alongside task_name; firmware doesn't render it).
+        reported["project_color"] = last_project_color_;
+    }
+    // Always include state_change_source: cloud-side toggl-api uses it on
+    // device.session.work.resumed to decide whether to auto-restart a Toggl
+    // entry (yes for "device", no for "shadow_command"). Default is "device"
+    // — initial value at construction — which is the safe pre-snapshot
+    // attribution for a brand-new boot.
+    reported["state_change_source"] = last_state_change_source_;
 
     size_t n = serializeJson(doc, out, out_size);
     if (n == 0 || n >= out_size) {
@@ -160,11 +183,35 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
         Serial.printf("[Shadow] Delta parse error: %s\n", err.c_str());
         return;
     }
-    // AWS sends {"state":{ <only-fields-that-differ-from-reported> }}. Any
-    // combination of task_name, command_id and command may be present. Treat
-    // each field independently: echoing it back in reported is what clears
-    // the AWS shadow diff, even if no `command` verb was sent (e.g. a
-    // server-side task-context update that only touches task_name).
+    // AWS sends {"state":{ <only-fields-that-differ-from-reported> },
+    //            "version": N, "timestamp": epoch }
+    // The version is the post-update shadow version and is the single
+    // strongest correlation key between this device log and the cloud-side
+    // CloudWatch logs: shadow_relay's IoT Topic Rule receives a `version`
+    // field in the same number for the matching update.
+    uint32_t shadow_version = doc["version"] | 0U;
+
+    // Build a key inventory of the delta state for later "nothing actionable"
+    // logging — knowing the exact key set tells us why we couldn't act on it
+    // (e.g. project_color present but no command, or some unknown field that
+    // a new cloud handler started writing).
+    JsonObject state_obj = doc["state"].as<JsonObject>();
+    char state_keys[160] = "";
+    if (!state_obj.isNull()) {
+        size_t pos = 0;
+        for (JsonPair kv : state_obj) {
+            int written = snprintf(state_keys + pos, sizeof(state_keys) - pos,
+                                   "%s%s", pos == 0 ? "" : ",", kv.key().c_str());
+            if (written <= 0 || (size_t)written >= sizeof(state_keys) - pos) break;
+            pos += (size_t)written;
+        }
+    }
+
+    // Any combination of task_name, command_id, command, remaining_sec_override,
+    // and project_color may be present. Treat each field independently:
+    // echoing it back in reported is what clears the AWS shadow diff, even
+    // if no `command` verb was sent (e.g. a server-side task-context update
+    // that only touches task_name).
     bool any_change = false;
 
     // --- task_name -------------------------------------------------------
@@ -173,8 +220,25 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
         strncmp(task_name, last_task_name_, sizeof(last_task_name_)) != 0) {
         strncpy(last_task_name_, task_name, sizeof(last_task_name_) - 1);
         last_task_name_[sizeof(last_task_name_) - 1] = '\0';
-        Serial.printf("[Shadow] Delta task_name=\"%s\"\n", last_task_name_);
+        Serial.printf("[Shadow] Delta v=%u task_name=\"%s\"\n",
+                      shadow_version, last_task_name_);
         if (task_name_cb_) task_name_cb_(last_task_name_);
+        any_change = true;
+    }
+
+    // --- project_color --------------------------------------------------
+    // Cloud's toggl-api consumer writes desired.project_color alongside
+    // task_name. The firmware doesn't render the color, but it must still
+    // echo it back or AWS will keep computing the diff and re-delivering a
+    // residual {project_color: ...} delta — which is what the old "nothing
+    // actionable" spam in the log was.
+    const char* pcolor = doc["state"]["project_color"] | (const char*)nullptr;
+    if (pcolor && *pcolor &&
+        strncmp(pcolor, last_project_color_, sizeof(last_project_color_)) != 0) {
+        strncpy(last_project_color_, pcolor, sizeof(last_project_color_) - 1);
+        last_project_color_[sizeof(last_project_color_) - 1] = '\0';
+        Serial.printf("[Shadow] Delta v=%u project_color=\"%s\"\n",
+                      shadow_version, last_project_color_);
         any_change = true;
     }
 
@@ -207,8 +271,8 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
     const char* cmd = doc["state"]["command"] | (const char*)nullptr;
     if (cmd && *cmd) {
 
-        Serial.printf("[Shadow] Delta command=\"%s\" id=\"%s\"%s\n",
-                      cmd, cid ? cid : "",
+        Serial.printf("[Shadow] Delta v=%u command=\"%s\" id=\"%s\"%s\n",
+                      shadow_version, cmd, cid ? cid : "",
                       remaining_override_sec
                           ? (" override=" + String(remaining_override_sec) + "s").c_str()
                           : "");
@@ -216,7 +280,7 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
         using Event = TimerStateMachine::Event;
         bool handled = true;
         if (strcmp(cmd, "start") == 0) {
-            sm_.handleEvent(Event::START);
+            sm_.handleEvent(Event::START, TimerStateMachine::EventSource::SHADOW);
             // After START, total_ms is set to the configured duration and
             // remaining_ms equals it. If the server gave us an offset, snap
             // remaining_ms to it. restoreState() preserves state=ACTIVE and
@@ -233,10 +297,14 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
                               remaining_ms, total_ms);
             }
         }
-        else if (strcmp(cmd, "pause")  == 0) sm_.handleEvent(Event::PAUSE);
-        else if (strcmp(cmd, "resume") == 0) sm_.handleEvent(Event::RESUME);
-        else if (strcmp(cmd, "skip")   == 0) sm_.handleEvent(Event::SKIP);
-        else if (strcmp(cmd, "stop")   == 0) sm_.handleEvent(Event::STOP);
+        else if (strcmp(cmd, "pause")  == 0) sm_.handleEvent(Event::PAUSE,
+                                                                TimerStateMachine::EventSource::SHADOW);
+        else if (strcmp(cmd, "resume") == 0) sm_.handleEvent(Event::RESUME,
+                                                                TimerStateMachine::EventSource::SHADOW);
+        else if (strcmp(cmd, "skip")   == 0) sm_.handleEvent(Event::SKIP,
+                                                                TimerStateMachine::EventSource::SHADOW);
+        else if (strcmp(cmd, "stop")   == 0) sm_.handleEvent(Event::STOP,
+                                                                TimerStateMachine::EventSource::SHADOW);
         else {
             Serial.printf("[Shadow] Unknown delta command: %s\n", cmd);
             handled = false;
@@ -252,7 +320,14 @@ void ShadowPublisher::handleShadowDelta(const char* json, size_t len) {
     if (any_change) {
         publishStateSnapshot();
     } else {
-        Serial.println("[Shadow] Delta: nothing actionable, ignoring");
+        // Include the key inventory + the shadow version so the cloud-side
+        // counterpart can be pinpointed: each shadow update gets a unique
+        // monotonic `version` and that's the same number CloudWatch sees on
+        // the corresponding update event. "fields=task_name" + a matching
+        // version on the cloud side narrows down to a single Lambda
+        // invocation.
+        Serial.printf("[Shadow] Delta v=%u nothing actionable (fields=%s)\n",
+                      shadow_version, state_keys[0] ? state_keys : "<empty>");
     }
 }
 

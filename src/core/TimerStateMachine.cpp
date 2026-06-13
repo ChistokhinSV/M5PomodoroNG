@@ -54,7 +54,7 @@ TimerStateMachine::~TimerStateMachine() {
     }
 }
 
-bool TimerStateMachine::handleEvent(Event event) {
+bool TimerStateMachine::handleEvent(Event event, EventSource source) {
     MutexGuard guard(state_mutex_, "state_mutex", 50);
     if (!guard.isLocked()) {
         Serial.println("[TimerStateMachine] ERROR: Failed to acquire mutex in handleEvent");
@@ -67,6 +67,10 @@ bool TimerStateMachine::handleEvent(Event event) {
         return false;
     }
 
+    // Stash for enterState() (which builds the STATE_CHANGED message). Reset
+    // back to DEVICE on the way out so a later TIMEOUT-driven enterState
+    // (no caller) is attributed to the device.
+    current_event_source_ = source;
     State old_state = state;
 
     switch (event) {
@@ -461,6 +465,7 @@ void TimerStateMachine::enterState(State new_state) {
         ev.duration_min   = sequence.getCurrentSession().duration_min;
         ev.session_number = sequence.getCurrentWorkSession();
         ev.total_sessions = sequence.getTotalWorkSessions();
+        ev.state_change_source = static_cast<uint8_t>(current_event_source_);
         ev.remaining_sec  = static_cast<uint16_t>(remaining_ms / 1000U);
         if (statistics) {
             ev.today_count = statistics->getToday().completed_sessions;

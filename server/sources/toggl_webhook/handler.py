@@ -27,6 +27,7 @@ import urllib.error
 import urllib.request
 
 from shared import events as ev
+from shared import logctx
 from shared import secrets as sec
 
 log = logging.getLogger()
@@ -157,7 +158,10 @@ def _classify(payload: dict) -> tuple[str | None, dict]:
 
 
 def handler(event: dict, context) -> dict:
-    log.info("toggl webhook event headers: %s", event.get("headers", {}))
+    logger = logctx.bind(
+        log, aws_request_id=logctx.request_id(context),
+        extra={"thing": TARGET_THING_NAME},
+    )
 
     # --- 1. signature ------------------------------------------------------
     raw_body = (event.get("body") or "").encode("utf-8")
@@ -167,7 +171,7 @@ def handler(event: dict, context) -> dict:
 
     headers = {k.lower(): v for k, v in (event.get("headers") or {}).items()}
     if not _verify_signature(raw_body, headers.get("x-webhook-signature-256", "")):
-        log.warning("Signature mismatch; rejecting")
+        logger.warning("Signature mismatch; rejecting")
         return _response(401, {"error": "bad signature"})
 
     # --- 2. Toggl "validation_code" ping ----------------------------------
@@ -179,13 +183,51 @@ def handler(event: dict, context) -> dict:
         return _response(400, {"error": "bad json"})
 
     if "validation_code" in body:
-        log.info("Returning validation_code for Toggl webhook handshake")
+        logger.info("Returning validation_code for Toggl webhook handshake")
         return _response(200, {"validation_code": body["validation_code"]})
+
+    # Surface the cause of every incoming event before classification. If
+    # Toggl Desktop's autotracker or some other client is restarting the
+    # entry the user just stopped, this is the layer that sees the truth.
+    # `subscription_id` / `webhook_id` / `created_at` come straight from
+    # Toggl's webhook envelope; the metadata block carries the action +
+    # entity model + the user id that performed the action. Together they
+    # answer "who did this and from which client?".
+    metadata = (body.get("metadata") or {})
+    entry_payload = body.get("payload") or {}
+    logger.info(
+        "toggl webhook ingress action=%s model=%s "
+        "creator_id=%s event_user_id=%s entry_id=%s description=%r "
+        "project_id=%s duration=%s start=%s stop=%s tags=%s "
+        "client_name=%r request_type=%s subscription_id=%s "
+        "event_id=%s headers_ua=%r",
+        metadata.get("action") or body.get("action"),
+        metadata.get("model") or body.get("model"),
+        entry_payload.get("user_id") or entry_payload.get("uid"),
+        metadata.get("event_user_id"),
+        entry_payload.get("id"),
+        entry_payload.get("description"),
+        entry_payload.get("project_id"),
+        entry_payload.get("duration"),
+        entry_payload.get("start"),
+        entry_payload.get("stop"),
+        entry_payload.get("tags"),
+        # Toggl Desktop sends X-Client-Name / Client-Name headers; surface them.
+        headers.get("client-name") or headers.get("x-client-name")
+            or metadata.get("origin"),
+        metadata.get("request_type"),
+        body.get("subscription_id") or body.get("webhook_id"),
+        body.get("event_id"),
+        headers.get("user-agent"),
+    )
 
     # --- 3. classify + emit ------------------------------------------------
     detail_type, extracted = _classify(body)
     if not detail_type:
-        log.info("Webhook payload classified as no-op; ignoring")
+        logger.info("Webhook payload classified as no-op; ignoring "
+                    "(action=%s entity=%s)",
+                    metadata.get("action") or body.get("action"),
+                    metadata.get("model") or body.get("model"))
         return _response(200, {"ignored": True})
 
     ts = int(time.time())
@@ -219,8 +261,9 @@ def handler(event: dict, context) -> dict:
     resp = _events.put_events(Entries=[entry])
     failed = resp.get("FailedEntryCount", 0)
     if failed:
-        log.error("put_events failed: %s", resp.get("Entries"))
+        logger.error("put_events failed: %s", resp.get("Entries"))
         return _response(502, {"error": "bus enqueue failed"})
 
-    log.info("Emitted %s for entry=%d", detail_type, extracted["toggl_entry_id"])
+    logger.info("Emitted %s for entry=%d event_id=%s",
+                detail_type, extracted["toggl_entry_id"], detail.event_id)
     return _response(200, {"emitted": detail_type})
