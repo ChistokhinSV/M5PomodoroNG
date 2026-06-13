@@ -77,23 +77,26 @@ void MainScreen::update(uint32_t deltaMs) {
     sequence_indicator_.setTotalSessions(sequence_.getTotalWorkSessions());
     sequence_indicator_.setDotsPerGroup(sequence_.getSessionsBeforeLong());  // Sessions per cycle
 
-    // MP-XX: Fix breadcrumb indicator for session 5+ (cycle wrap)
-    // Convert 1-based session (1-4) to 0-based index (0-3) for SequenceIndicator
-    uint8_t current_work_session = sequence_.getCurrentWorkSession() - 1;
-
-    // Calculate completed sessions within current cycle (resets after each cycle)
-    uint8_t completed = sequence_.getCompletedToday();
-    uint8_t total = sequence_.getTotalWorkSessions();
-    uint8_t completed_sessions = completed % total;
-
+    // getCurrentWorkSession() is 1-based within the current mega-cycle and
+    // already wraps correctly when advance() resets current_session.
+    // completed_today counts mega-cycle wraps, NOT work-session completions, so
+    // `completed_today % total_work_sessions` is unit-mismatched garbage that
+    // happens to be 0 whenever you've wrapped exactly N times — which left the
+    // previous 3 dots gray after a clean 4-session cycle. Drive both fields
+    // from the work-session counter and ignore completed_today here.
+    uint8_t work_session_1b = sequence_.getCurrentWorkSession();
+    uint8_t current_work_session = work_session_1b - 1;  // 0-based pulse pos
     bool in_break = !sequence_.isWorkSession();
+    uint8_t completed_sessions = in_break ? work_session_1b
+                                          : (work_session_1b - 1);
 
     // DEBUG: Log breadcrumb calculation (every 60 frames ~2 sec)
     static uint8_t breadcrumb_log_counter = 0;
     if (++breadcrumb_log_counter >= 60) {
         breadcrumb_log_counter = 0;
-        Serial.printf("[BREADCRUMB DEBUG] getCurrentWorkSession()=%d, getCompletedToday()=%d, getTotalWorkSessions()=%d\n",
-                     sequence_.getCurrentWorkSession(), sequence_.getCompletedToday(), sequence_.getTotalWorkSessions());
+        Serial.printf("[BREADCRUMB DEBUG] work_session_1b=%d, total_work=%d, completed_today=%d (mega-cycle wraps)\n",
+                     work_session_1b, sequence_.getTotalWorkSessions(),
+                     sequence_.getCompletedToday());
         Serial.printf("[BREADCRUMB DEBUG] current_work_session=%d, completed_sessions=%d, in_break=%s\n",
                      current_work_session, completed_sessions, in_break ? "YES" : "NO");
     }
